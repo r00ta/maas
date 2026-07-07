@@ -28,6 +28,7 @@ class SpaceHandler(TimestampedModelHandler):
             "set_active",
         ]
         listen_channels = ["space"]
+        view_permission = NodePermission.view
 
     def dehydrate(self, obj, data, for_list=False):
         data["name"] = obj.get_name()

@@ -44,6 +44,7 @@ class VLANHandler(TimestampedModelHandler):
             "delete",
         ]
         listen_channels = ["vlan"]
+        view_permission = NodePermission.view
 
     def dehydrate_primary_rack(self, rack):
         if rack is None:

@@ -3,7 +3,9 @@
 
 
 import random
+from unittest.mock import MagicMock
 
+from maasserver import openfga
 from maasserver.enum import INTERFACE_TYPE
 from maasserver.models.vlan import VLAN
 from maasserver.testing.factory import factory
@@ -15,6 +17,24 @@ from maasserver.websockets.base import (
     HandlerValidationError,
 )
 from maasserver.websockets.handlers.vlan import VLANHandler
+
+
+class TestVLANHandlerViewPermission(MAASServerTestCase):
+    def deny_global_view(self):
+        client = openfga.get_openfga_client()
+        client.can_view_global_entities = MagicMock(return_value=False)
+
+    def test_list_requires_view_permission(self):
+        self.deny_global_view()
+        handler = VLANHandler(factory.make_User(), {}, None)
+        factory.make_VLAN()
+        self.assertRaises(HandlerPermissionError, handler.list, {})
+
+    def test_get_requires_view_permission(self):
+        self.deny_global_view()
+        vlan = factory.make_VLAN()
+        handler = VLANHandler(factory.make_User(), {}, None)
+        self.assertRaises(HandlerPermissionError, handler.get, {"id": vlan.id})
 
 
 class TestVLANHandler(MAASServerTestCase):

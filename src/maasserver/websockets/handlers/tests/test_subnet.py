@@ -2,21 +2,45 @@
 # GNU Affero General Public License version 3 (see the file LICENSE).
 
 import re
-from unittest.mock import sentinel
+from unittest.mock import MagicMock, sentinel
 
 from fixtures import FakeLogger
 from netaddr import IPNetwork
 
 from maascommon.utils.network import IPRangeStatistics
+from maasserver import openfga
 from maasserver.api import discoveries as discoveries_module
 from maasserver.enum import INTERFACE_TYPE, IPADDRESS_TYPE, NODE_STATUS
 from maasserver.models.subnet import Subnet
 from maasserver.testing.factory import factory
 from maasserver.testing.testcase import MAASServerTestCase
 from maasserver.utils.orm import post_commit_hooks, reload_object
-from maasserver.websockets.base import dehydrate_datetime
+from maasserver.websockets.base import (
+    dehydrate_datetime,
+    HandlerPermissionError,
+)
 from maasserver.websockets.handlers.subnet import SubnetHandler
 from maastesting.djangotestcase import count_queries
+
+
+class TestSubnetHandlerViewPermission(MAASServerTestCase):
+    def deny_global_view(self):
+        client = openfga.get_openfga_client()
+        client.can_view_global_entities = MagicMock(return_value=False)
+
+    def test_list_requires_view_permission(self):
+        self.deny_global_view()
+        handler = SubnetHandler(factory.make_User(), {}, None)
+        factory.make_Subnet()
+        self.assertRaises(HandlerPermissionError, handler.list, {})
+
+    def test_get_requires_view_permission(self):
+        self.deny_global_view()
+        subnet = factory.make_Subnet()
+        handler = SubnetHandler(factory.make_User(), {}, None)
+        self.assertRaises(
+            HandlerPermissionError, handler.get, {"id": subnet.id}
+        )
 
 
 class TestSubnetHandler(MAASServerTestCase):

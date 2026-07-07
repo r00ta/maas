@@ -38,6 +38,7 @@ class SubnetHandler(TimestampedModelHandler):
             "scan",
         ]
         listen_channels = ["subnet"]
+        view_permission = NodePermission.view
 
     def dehydrate_dns_servers(self, dns_servers):
         if dns_servers is None:

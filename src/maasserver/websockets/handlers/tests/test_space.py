@@ -3,13 +3,39 @@
 
 """Tests for `maasserver.websockets.handlers.space`"""
 
+from unittest.mock import MagicMock
+
+from maasserver import openfga
 from maasserver.models.space import Space
 from maasserver.testing.factory import factory
 from maasserver.testing.testcase import MAASServerTestCase
 from maasserver.utils.orm import reload_object
-from maasserver.websockets.base import dehydrate_datetime
+from maasserver.websockets.base import (
+    dehydrate_datetime,
+    HandlerPermissionError,
+)
 from maasserver.websockets.handlers.space import SpaceHandler
 from maastesting.djangotestcase import count_queries
+
+
+class TestSpaceHandlerViewPermission(MAASServerTestCase):
+    def deny_global_view(self):
+        client = openfga.get_openfga_client()
+        client.can_view_global_entities = MagicMock(return_value=False)
+
+    def test_list_requires_view_permission(self):
+        self.deny_global_view()
+        handler = SpaceHandler(factory.make_User(), {}, None)
+        factory.make_Space()
+        self.assertRaises(HandlerPermissionError, handler.list, {})
+
+    def test_get_requires_view_permission(self):
+        self.deny_global_view()
+        space = factory.make_Space()
+        handler = SpaceHandler(factory.make_User(), {}, None)
+        self.assertRaises(
+            HandlerPermissionError, handler.get, {"id": space.id}
+        )
 
 
 class TestSpaceHandler(MAASServerTestCase):
