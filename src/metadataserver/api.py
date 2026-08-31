@@ -1,4 +1,4 @@
-# Copyright 2012-2021 Canonical Ltd.  This software is licensed under the
+# Copyright 2012-2026 Canonical Ltd.  This software is licensed under the
 # GNU Affero General Public License version 3 (see the file LICENSE).
 
 """Metadata API."""
@@ -935,7 +935,6 @@ class VersionIndexHandler(MetadataViewHandler):
         """
         node = get_queried_node(request, for_mac=mac)
         node.set_netboot(False)
-        node.set_boot_order(False)
         return rc.ALL_OK
 
     @operation(idempotent=False)
@@ -943,7 +942,6 @@ class VersionIndexHandler(MetadataViewHandler):
         """Turn on netboot on the node."""
         node = get_queried_node(request, for_mac=mac)
         node.set_netboot(True)
-        node.set_boot_order(True)
         return rc.ALL_OK
 
 
@@ -1138,20 +1136,14 @@ class UserDataHandler(MetadataViewHandler):
             # for user-data is when MAAS hands the node
             # off to a user.
             if node.status == NODE_STATUS.DEPLOYING:
-                if node.install_kvm or node.register_vmhost:
-                    # Rather than ending deployment here, note that we're
-                    # deploying a VM host.
-                    node.agent_name = "maas-kvm-pod"
-                    node.save()
-                else:
-                    # MAAS currently considers a machine "Deployed" when the
-                    # cloud-init user data is requested. Note that this doesn't
-                    # mean the machine is ready for use yet; cloud-init will
-                    # also send a 'finish' event for the 'modules-final'
-                    # activity name. However, that check is ambiguous because
-                    # it occurs both when curtin is installing, and when
-                    # the machine reboots to finish its deployment.
-                    node.end_deployment()
+                # MAAS currently considers a machine "Deployed" when the
+                # cloud-init user data is requested. Note that this doesn't
+                # mean the machine is ready for use yet; cloud-init will
+                # also send a 'finish' event for the 'modules-final'
+                # activity name. However, that check is ambiguous because
+                # it occurs both when curtin is installing, and when
+                # the machine reboots to finish its deployment.
+                node.end_deployment()
             # If this node is supposed to be powered off, serve the
             # 'poweroff' userdata.
             if node.get_boot_purpose() == "poweroff":
@@ -1597,7 +1589,6 @@ class AnonMetaDataHandler(VersionIndexHandler):
         """
         node = get_object_or_404(Node, system_id=system_id)
         node.set_netboot(False)
-        node.set_boot_order(False)
 
         # Build and register an event for "node installation finished".
         # This is a best-guess. At the moment, netboot_off() only gets

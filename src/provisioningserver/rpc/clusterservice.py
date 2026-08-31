@@ -1,4 +1,4 @@
-# Copyright 2014-2025 Canonical Ltd.  This software is licensed under the
+# Copyright 2014-2026 Canonical Ltd.  This software is licensed under the
 # GNU Affero General Public License version 3 (see the file LICENSE).
 
 """RPC implementation for clusters."""
@@ -30,7 +30,7 @@ from provisioningserver.certificates import (
     store_maas_agent_cert_tuple,
     store_maas_cluster_cert_tuple,
 )
-from provisioningserver.config import ClusterConfiguration, is_dev_environment
+from provisioningserver.config import ClusterConfiguration
 from provisioningserver.drivers.hardware.seamicro import (
     probe_seamicro15k_and_enlist,
 )
@@ -46,7 +46,7 @@ from provisioningserver.drivers.power.registry import PowerDriverRegistry
 from provisioningserver.logger import get_maas_logger, LegacyLogger
 from provisioningserver.path import get_maas_data_path
 from provisioningserver.prometheus.metrics import set_global_labels
-from provisioningserver.rpc import cluster, common, exceptions, pods, region
+from provisioningserver.rpc import cluster, common, exceptions, region
 from provisioningserver.rpc.common import (
     ConnectionAuthStatus,
     Ping,
@@ -56,7 +56,6 @@ from provisioningserver.rpc.connectionpool import ConnectionPool
 from provisioningserver.rpc.interfaces import IConnectionToRegion
 from provisioningserver.rpc.power import get_power_state
 from provisioningserver.security import calculate_digest, fernet_decrypt_psk
-from provisioningserver.utils import sudo
 from provisioningserver.utils.env import (
     MAAS_AGENT_UUID,
     MAAS_ID,
@@ -76,7 +75,6 @@ from provisioningserver.utils.shell import (
     ExternalProcessError,
     get_env_with_bytes_locale,
 )
-from provisioningserver.utils.snap import running_in_snap
 from provisioningserver.utils.twisted import (
     call,
     callOut,
@@ -121,8 +119,6 @@ def get_scan_all_networks_args(
     :param cidrs: an iterable of CIDR strings
     """
     args = [get_maas_common_command(), "scan-network"]
-    if not is_dev_environment():
-        args = sudo(args)
     if threads is not None:
         args.extend(["--threads", str(threads)])
     if force_ping:
@@ -300,25 +296,6 @@ class Cluster(SecuredRPCProtocol):
             )
         return {"missing_packages": driver.detect_missing_packages()}
 
-    @cluster.SetBootOrder.responder
-    def set_boot_order(self, system_id, hostname, power_type, context, order):
-        driver = PowerDriverRegistry.get_item(power_type)
-        if driver is None:
-            raise exceptions.UnknownPowerType(
-                f"No driver found for power type '{power_type}'"
-            )
-        elif not driver.can_set_boot_order:
-            # Don't raise NotImplementedError because most boot drivers can
-            # provide a boot config to boot the proper device.
-            log.debug(
-                f"{power_type} does not support configuring the boot order!"
-            )
-            return {}
-        else:
-            d = driver.set_boot_order(system_id, context, order)
-            d.addCallback(lambda _: {})
-            return d
-
     @cluster.AddChassis.responder
     def add_chassis(
         self,
@@ -458,75 +435,6 @@ class Cluster(SecuredRPCProtocol):
             maaslog.error(message)
         return {}
 
-    @cluster.DiscoverPodProjects.responder
-    def discover_pod_projects(self, type, context):
-        """DiscoverPod()
-
-        Implementation of
-        :py:class:`~provisioningserver.rpc.cluster.DiscoverPodProjects`.
-        """
-
-        return pods.discover_pod_projects(type, context)
-
-    @cluster.DiscoverPod.responder
-    def discover_pod(self, type, context, pod_id=None, name=None):
-        """DiscoverPod()
-
-        Implementation of
-        :py:class:`~provisioningserver.rpc.cluster.DiscoverPod`.
-        """
-        return pods.discover_pod(type, context, pod_id=pod_id, name=name)
-
-    @cluster.SendPodCommissioningResults.responder
-    def send_pod_commissioning_results(
-        self,
-        pod_id,
-        name,
-        type,
-        system_id,
-        context,
-        consumer_key,
-        token_key,
-        token_secret,
-        metadata_url,
-    ):
-        """SendPodCommissioningResults()
-
-        Implementation of
-        :py:class:`~provisioningserver.rpc.cluster.SendPodCommissioningResults`.
-        """
-        return pods.send_pod_commissioning_results(
-            type,
-            context,
-            pod_id,
-            name,
-            system_id,
-            consumer_key,
-            token_key,
-            token_secret,
-            metadata_url,
-        )
-
-    @cluster.ComposeMachine.responder
-    def compose_machine(self, type, context, request, pod_id, name):
-        """ComposeMachine()
-
-        Implementation of
-        :py:class:`~provisioningserver.rpc.cluster.ComposeMachine`.
-        """
-        return pods.compose_machine(
-            type, context, request, pod_id=pod_id, name=name
-        )
-
-    @cluster.DecomposeMachine.responder
-    def decompose_machine(self, type, context, pod_id, name):
-        """DecomposeMachine()
-
-        Implementation of
-        :py:class:`~provisioningserver.rpc.cluster.DecomposeMachine`.
-        """
-        return pods.decompose_machine(type, context, pod_id=pod_id, name=name)
-
     @cluster.ScanNetworks.responder
     def scan_all_networks(
         self,
@@ -580,17 +488,14 @@ class Cluster(SecuredRPCProtocol):
         MAAS_SECRET.set(None)
         MAAS_SHARED_SECRET.set(None)
         try:
-            if running_in_snap():
-                call_and_check(["snapctl", "restart", "maas.pebble"])
-            else:
-                call_and_check(["sudo", "systemctl", "restart", "maas-rackd"])
+            call_and_check(["snapctl", "restart", "maas.pebble"])
         except ExternalProcessError as e:
             # Since the snap sends a SIGTERM to terminate the process, python
             # returns -15 as a return code. This indicates the termination
             # signal has been performed and the process terminated. However,
             # This is not a failure. As such, work around the non-zero return
             # (-15) and do not raise an error.
-            if not (running_in_snap() and e.returncode == -15):
+            if e.returncode != -15:
                 maaslog.error("Unable to disable and stop the rackd service")
                 raise exceptions.CannotDisableAndShutoffRackd(  # noqa: B904
                     e.output_as_unicode

@@ -3,6 +3,7 @@
 
 from datetime import datetime
 from enum import IntEnum
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -32,10 +33,18 @@ class AccessTokenType(IntEnum):
     OPAQUE = 1
 
 
+class ProviderVendorType(IntEnum):
+    GENERIC = 0
+    ENTRAID = 1
+    AUTH0 = 2
+    KEYCLOAK = 3
+
+
 @generate_builder()
 class OAuthProvider(MaasTimestampedBaseModel):
     issuer_url: str
     name: str
+    vendor: ProviderVendorType
     client_id: str
     client_secret: str
     redirect_uri: str
@@ -43,3 +52,4 @@ class OAuthProvider(MaasTimestampedBaseModel):
     scopes: str
     enabled: bool
     metadata: ProviderMetadata
+    config: dict[str, Any] | None = None

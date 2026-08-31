@@ -4,8 +4,8 @@
 
 \restrict jDB4gdI1N8dbUCAC3vcdCvWs48TBU3tT39yhtb0ijqwqYnAc3QoCur8LfK1MnsD
 
--- Dumped from database version 18.4 (Ubuntu 18.4-0ubuntu0.26.04.1)
--- Dumped by pg_dump version 18.4 (Ubuntu 18.4-0ubuntu0.26.04.1)
+-- Dumped from database version 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1)
+-- Dumped by pg_dump version 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -52,6 +52,20 @@ CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA temporal_visibility;
 --
 
 COMMENT ON EXTENSION btree_gin IS 'support for indexing common datatypes in GIN';
+
+
+--
+-- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
@@ -709,70 +723,6 @@ DECLARE
 BEGIN
   PERFORM pg_notify('fabric_update',CAST(NEW.id AS text));
   RETURN NEW;
-END;
-$$;
-
-
---
--- Name: interface_pod_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.interface_pod_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    _node_id BIGINT;
-    _pod_id BIGINT;
-BEGIN
-    IF TG_OP = 'INSERT' then
-        SELECT INTO _pod_id pod_id
-        FROM maasserver_podhost
-        JOIN maasserver_nodeconfig
-          ON maasserver_nodeconfig.node_id = maasserver_podhost.node_id
-        WHERE maasserver_nodeconfig.id = NEW.node_config_id;
-
-        IF _pod_id IS NOT NULL then
-          PERFORM pg_notify('pod_update',CAST(_pod_id AS text));
-        END IF;
-    ELSIF TG_OP = 'UPDATE' then
-        IF OLD.vlan_id IS NOT DISTINCT FROM NEW.vlan_id
-            AND OLD.node_config_id IS NOT DISTINCT FROM NEW.node_config_id then
-            -- Nothing relevant changed during interface update.
-            RETURN NULL;
-        END IF;
-
-        SELECT INTO _pod_id pod_id
-        FROM maasserver_podhost
-        JOIN maasserver_nodeconfig
-          ON maasserver_nodeconfig.node_id = maasserver_podhost.node_id
-        WHERE maasserver_nodeconfig.id = NEW.node_config_id;
-
-        IF _pod_id IS NOT NULL then
-          PERFORM pg_notify('pod_update',CAST(_pod_id AS text));
-        END IF;
-        IF OLD.node_config_id != NEW.node_config_id then
-          SELECT INTO _pod_id pod_id
-          FROM maasserver_podhost
-          JOIN maasserver_nodeconfig
-            ON maasserver_nodeconfig.node_id = maasserver_podhost.node_id
-          WHERE maasserver_nodeconfig.id = OLD.node_config_id;
-
-          IF _pod_id IS NOT NULL then
-            PERFORM pg_notify('pod_update',CAST(_pod_id AS text));
-          END IF;
-        END IF;
-    ELSE
-        SELECT INTO _pod_id pod_id
-        FROM maasserver_podhost
-        JOIN maasserver_nodeconfig
-          ON maasserver_nodeconfig.node_id = maasserver_podhost.node_id
-        WHERE maasserver_nodeconfig.id = OLD.node_config_id;
-
-        IF _pod_id IS NOT NULL then
-          PERFORM pg_notify('pod_update',CAST(_pod_id AS text));
-        END IF;
-    END IF;
-    RETURN NULL;
 END;
 $$;
 
@@ -2383,79 +2333,6 @@ $$;
 
 
 --
--- Name: node_pod_delete_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_pod_delete_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc RECORD;
-BEGIN
-  IF OLD.bmc_id IS NOT NULL THEN
-    SELECT * INTO bmc FROM maasserver_bmc WHERE id = OLD.bmc_id;
-    IF bmc.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_update',CAST(OLD.bmc_id AS text));
-    END IF;
-  END IF;
-  RETURN OLD;
-END;
-$$;
-
-
---
--- Name: node_pod_insert_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_pod_insert_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc RECORD;
-BEGIN
-  IF NEW.bmc_id IS NOT NULL THEN
-    SELECT * INTO bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-    IF bmc.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_update',CAST(NEW.bmc_id AS text));
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: node_pod_update_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_pod_update_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc RECORD;
-BEGIN
-  IF ((OLD.bmc_id IS NULL and NEW.bmc_id IS NOT NULL) OR
-      (OLD.bmc_id IS NOT NULL and NEW.bmc_id IS NULL) OR
-      OLD.bmc_id != NEW.bmc_id) THEN
-    IF OLD.bmc_id IS NOT NULL THEN
-      SELECT * INTO bmc FROM maasserver_bmc WHERE id = OLD.bmc_id;
-      IF bmc.bmc_type = 1 THEN
-        PERFORM pg_notify('pod_update',CAST(OLD.bmc_id AS text));
-      END IF;
-    END IF;
-  END IF;
-  IF NEW.bmc_id IS NOT NULL THEN
-    SELECT * INTO bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-    IF bmc.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_update',CAST(NEW.bmc_id AS text));
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
---
 -- Name: node_type_change_notify(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2501,130 +2378,6 @@ BEGIN
         PERFORM pg_notify('controller_create',CAST(
           NEW.system_id AS TEXT));
     END CASE;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: node_vmcluster_delete_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_vmcluster_delete_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc RECORD;
-  hints RECORD;
-BEGIN
-  IF OLD.bmc_id IS NOT NULL THEN
-    SELECT * INTO bmc FROM maasserver_bmc WHERE id = OLD.bmc_id;
-    IF bmc.bmc_type = 1 THEN
-      SELECT * INTO hints FROM maasserver_podhints WHERE pod_id = bmc.id;
-      IF hints.cluster_id IS NOT NULL THEN
-        PERFORM pg_notify('vmcluster_update',CAST(hints.cluster_id AS text));
-      END IF;
-    END IF;
-  END IF;
-  RETURN OLD;
-END;
-$$;
-
-
---
--- Name: node_vmcluster_insert_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_vmcluster_insert_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc RECORD;
-  hints RECORD;
-BEGIN
-  IF NEW.bmc_id IS NOT NULL THEN
-    SELECT * INTO bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-    IF bmc.bmc_type = 1 THEN
-      SELECT * INTO hints FROM maasserver_podhints WHERE pod_id = bmc.id;
-      IF hints IS NOT NULL AND hints.cluster_id IS NOT NULL THEN
-        PERFORM pg_notify('vmcluster_update',CAST(hints.cluster_id AS text));
-      END IF;
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: node_vmcluster_update_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.node_vmcluster_update_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  bmc_type INT;
-  new_bmc RECORD;
-  old_bmc RECORD;
-  old_hints RECORD;
-  new_hints RECORD;
-BEGIN
-  bmc_type = 1;
-  IF OLD.bmc_id IS NOT NULL AND NEW.bmc_id IS NOT NULL THEN
-    IF OLD.bmc_id = NEW.bmc_id THEN
-      SELECT * INTO new_bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-      IF new_bmc.bmc_type = bmc_type THEN
-        SELECT * INTO new_hints FROM maasserver_podhints WHERE pod_id = new_bmc.id;
-        IF new_hints IS NOT NULL AND new_hints.cluster_id is NOT NULL THEN
-          PERFORM pg_notify('vmcluster_update',CAST(new_hints.cluster_id AS text));
-        END IF;
-      END IF;
-    ELSE
-      SELECT * INTO new_bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-      SELECT * INTO old_bmc FROM maasserver_bmc WHERE id = OLD.bmc_id;
-      IF new_bmc.bmc_type = bmc_type THEN
-        SELECT * INTO new_hints FROM maasserver_podhints WHERE pod_id = new_bmc.id;
-      END IF;
-      IF old_bmc.bmc_type = bmc_type THEN
-        SELECT * INTO old_hints FROM maasserver_podhints WHERE pod_id = old_bmc.id;
-      END IF;
-      IF old_hints IS NOT NULL THEN
-        IF old_hints.cluster_id IS NOT NULL THEN
-          PERFORM pg_notify('vmcluster_update',CAST(old_hints.cluster_id as text));
-        END IF;
-        IF new_hints IS NOT NULL THEN
-          IF new_hints.cluster_id IS NOT NULL AND new_hints.cluster_id != old_hints.cluster_id THEN
-            PERFORM pg_notify('vmcluster_update',CAST(new_hints.cluster_id as text));
-          END IF;
-        END IF;
-      END IF;
-      IF new_hints IS NOT NULL THEN
-        IF new_hints.cluster_id IS NOT NULL AND old_hints IS NULL THEN
-          PERFORM pg_notify('vmcluster_update',CAST(new_hints.cluster_id as text));
-        END IF;
-      END IF;
-    END IF;
-  ELSE
-    IF OLD.bmc_id IS NOT NULL THEN
-      SELECT * INTO old_bmc FROM maasserver_bmc WHERE id = OLD.bmc_id;
-      IF old_bmc.bmc_type = bmc_type THEN
-        SELECT * INTO old_hints FROM maasserver_podhints WHERE pod_id = old_bmc.id;
-        IF old_hints IS NOT NULL AND old_hints.cluster_id IS NOT NULL THEN
-          PERFORM pg_notify('vmcluster_update',CAST(old_hints.cluster_id as text));
-        END IF;
-      END IF;
-    END IF;
-    IF NEW.bmc_id IS NOT NULL THEN
-      SELECT * INTO new_bmc FROM maasserver_bmc WHERE id = NEW.bmc_id;
-      IF new_bmc.bmc_type = bmc_type THEN
-        SELECT * INTO new_hints FROM maasserver_podhints WHERE pod_id = new_bmc.id;
-        IF new_hints IS NOT NULL AND new_hints.cluster_id IS NOT NULL THEN
-          PERFORM pg_notify('vmcluster_update',CAST(new_hints.cluster_id as text));
-        END IF;
-      END IF;
-    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -3024,60 +2777,6 @@ CREATE FUNCTION public.packagerepository_update_notify() RETURNS trigger
 DECLARE
 BEGIN
   PERFORM pg_notify('packagerepository_update',CAST(NEW.id AS text));
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: pod_delete_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pod_delete_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF OLD.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_delete',CAST(OLD.id AS text));
-  END IF;
-  RETURN OLD;
-END;
-$$;
-
-
---
--- Name: pod_insert_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pod_insert_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF NEW.bmc_type = 1 THEN
-    PERFORM pg_notify('pod_create',CAST(NEW.id AS text));
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
---
--- Name: pod_update_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.pod_update_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF OLD.bmc_type = NEW.bmc_type THEN
-    IF OLD.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_update',CAST(OLD.id AS text));
-    END IF;
-  ELSIF OLD.bmc_type = 0 AND NEW.bmc_type = 1 THEN
-      PERFORM pg_notify('pod_create',CAST(NEW.id AS text));
-  ELSIF OLD.bmc_type = 1 AND NEW.bmc_type = 0 THEN
-      PERFORM pg_notify('pod_delete',CAST(OLD.id AS text));
-  END IF;
   RETURN NEW;
 END;
 $$;
@@ -3714,16 +3413,13 @@ CREATE TABLE public.maasserver_node (
     current_commissioning_script_set_id bigint,
     current_installation_script_set_id bigint,
     current_testing_script_set_id bigint,
-    install_rackd boolean NOT NULL,
     locked boolean NOT NULL,
     pool_id integer,
     instance_power_parameters jsonb NOT NULL,
-    install_kvm boolean NOT NULL,
     hardware_uuid character varying(36),
     ephemeral_deploy boolean NOT NULL,
     description text NOT NULL,
     dynamic boolean NOT NULL,
-    register_vmhost boolean NOT NULL,
     last_applied_storage_layout character varying(50) NOT NULL,
     current_config_id bigint,
     enable_hw_sync boolean NOT NULL,
@@ -4430,48 +4126,6 @@ $$;
 
 
 --
--- Name: vmcluster_delete_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.vmcluster_delete_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    PERFORM pg_notify('vmcluster_delete',CAST(OLD.id as text));
-    RETURN OLD;
-END;
-$$;
-
-
---
--- Name: vmcluster_insert_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.vmcluster_insert_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    PERFORM pg_notify('vmcluster_create',CAST(NEW.id AS text));
-    RETURN NEW;
-END;
-$$;
-
-
---
--- Name: vmcluster_update_notify(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.vmcluster_update_notify() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    PERFORM pg_notify('vmcluster_update',CAST(NEW.id AS text));
-    RETURN NEW;
-END;
-$$;
-
-
---
 -- Name: convert_ts(character varying); Type: FUNCTION; Schema: temporal_visibility; Owner: -
 --
 
@@ -4845,38 +4499,6 @@ ALTER SEQUENCE public.django_content_type_id_seq OWNED BY public.django_content_
 
 
 --
--- Name: django_migrations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.django_migrations (
-    id integer NOT NULL,
-    app character varying(255) NOT NULL,
-    name character varying(255) NOT NULL,
-    applied timestamp with time zone NOT NULL
-);
-
-
---
--- Name: django_migrations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.django_migrations_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: django_migrations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.django_migrations_id_seq OWNED BY public.django_migrations.id;
-
-
---
 -- Name: django_session; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4992,26 +4614,7 @@ CREATE TABLE public.maasserver_bmc (
     updated timestamp with time zone NOT NULL,
     power_type character varying(10) NOT NULL,
     ip_address_id bigint,
-    architectures text[],
-    bmc_type integer NOT NULL,
-    capabilities text[],
-    cores integer NOT NULL,
-    cpu_speed integer NOT NULL,
-    local_storage bigint NOT NULL,
-    memory integer NOT NULL,
-    name character varying(255) NOT NULL,
-    pool_id integer,
-    zone_id bigint NOT NULL,
-    tags text[],
-    cpu_over_commit_ratio double precision NOT NULL,
-    memory_over_commit_ratio double precision NOT NULL,
-    default_storage_pool_id bigint,
     power_parameters jsonb NOT NULL,
-    default_macvlan_mode character varying(32),
-    version text NOT NULL,
-    created_with_cert_expiration_days integer,
-    created_with_maas_generated_cert boolean,
-    created_with_trust_password boolean,
     created_by_commissioning boolean
 );
 
@@ -5120,7 +4723,6 @@ CREATE TABLE public.maasserver_bootresourcefile (
     filename character varying(255) NOT NULL,
     filetype character varying(20) NOT NULL,
     extra jsonb NOT NULL,
-    largefile_id bigint,
     resource_set_id bigint NOT NULL,
     sha256 character varying(64) NOT NULL,
     size bigint NOT NULL,
@@ -5556,7 +5158,6 @@ CREATE TABLE public.maasserver_controllerinfo (
     updated timestamp with time zone NOT NULL,
     node_id bigint NOT NULL,
     version character varying(255) NOT NULL,
-    install_type character varying(255) NOT NULL,
     snap_cohort character varying(255) NOT NULL,
     snap_revision character varying(255) NOT NULL,
     snap_update_revision character varying(255) NOT NULL,
@@ -6412,40 +6013,6 @@ ALTER SEQUENCE public.maasserver_iprange_id_seq OWNED BY public.maasserver_ipran
 
 
 --
--- Name: maasserver_largefile; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_largefile (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    sha256 character varying(64) NOT NULL,
-    total_size bigint NOT NULL,
-    content oid NOT NULL,
-    size bigint NOT NULL
-);
-
-
---
--- Name: maasserver_largefile_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_largefile_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_largefile_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_largefile_id_seq OWNED BY public.maasserver_largefile.id;
-
-
---
 -- Name: maasserver_licensekey; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6952,7 +6519,9 @@ CREATE TABLE public.maasserver_oidc_provider (
     scopes character varying(255) NOT NULL,
     enabled boolean NOT NULL,
     metadata jsonb NOT NULL,
-    token_type integer NOT NULL
+    token_type integer NOT NULL,
+    vendor integer NOT NULL,
+    config jsonb
 );
 
 
@@ -7216,145 +6785,6 @@ CREATE TABLE public.maasserver_physicalblockdevice (
     firmware_version character varying(255),
     numa_node_id bigint NOT NULL
 );
-
-
---
--- Name: maasserver_podhints; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_podhints (
-    id bigint NOT NULL,
-    cores integer NOT NULL,
-    memory integer NOT NULL,
-    local_storage bigint NOT NULL,
-    pod_id bigint NOT NULL,
-    cpu_speed integer NOT NULL,
-    cluster_id bigint
-);
-
-
---
--- Name: maasserver_podhints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_podhints_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_podhints_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_podhints_id_seq OWNED BY public.maasserver_podhints.id;
-
-
---
--- Name: maasserver_podhints_nodes; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_podhints_nodes (
-    id integer NOT NULL,
-    podhints_id bigint NOT NULL,
-    node_id bigint NOT NULL
-);
-
-
---
--- Name: maasserver_podhints_nodes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_podhints_nodes_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_podhints_nodes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_podhints_nodes_id_seq OWNED BY public.maasserver_podhints_nodes.id;
-
-
---
--- Name: maasserver_staticipaddress; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_staticipaddress (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    ip inet,
-    alloc_type integer NOT NULL,
-    subnet_id bigint,
-    user_id integer,
-    lease_time integer NOT NULL,
-    temp_expires_on timestamp with time zone
-);
-
-
---
--- Name: maasserver_podhost; Type: VIEW; Schema: public; Owner: -
---
-
-CREATE VIEW public.maasserver_podhost AS
- SELECT ((pod.id << 32) | node.id) AS id,
-    node.id AS node_id,
-    node.system_id,
-    node.hostname,
-    pod.id AS pod_id,
-    pod.name AS pod_name,
-    pod.power_type,
-    if.id AS interface_id,
-    if.name AS interface_name,
-    ip.id AS staticipaddress_id,
-    ip.ip
-   FROM ((((public.maasserver_bmc pod
-     LEFT JOIN public.maasserver_staticipaddress ip ON (((pod.ip_address_id = ip.id) AND (pod.bmc_type = 1))))
-     LEFT JOIN public.maasserver_interface_ip_addresses ifip ON ((ifip.staticipaddress_id = ip.id)))
-     LEFT JOIN public.maasserver_interface if ON ((if.id = ifip.interface_id)))
-     LEFT JOIN public.maasserver_node node ON ((node.current_config_id = if.node_config_id)));
-
-
---
--- Name: maasserver_podstoragepool; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_podstoragepool (
-    id bigint NOT NULL,
-    name character varying(255) NOT NULL,
-    pool_id character varying(255) NOT NULL,
-    pool_type character varying(255) NOT NULL,
-    path character varying(4095) NOT NULL,
-    storage bigint NOT NULL,
-    pod_id bigint NOT NULL
-);
-
-
---
--- Name: maasserver_podstoragepool_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_podstoragepool_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_podstoragepool_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_podstoragepool_id_seq OWNED BY public.maasserver_podstoragepool.id;
 
 
 --
@@ -7674,6 +7104,23 @@ CREATE SEQUENCE public.maasserver_rootkey_id_seq
 --
 
 ALTER SEQUENCE public.maasserver_rootkey_id_seq OWNED BY public.maasserver_rootkey.id;
+
+
+--
+-- Name: maasserver_staticipaddress; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.maasserver_staticipaddress (
+    id bigint NOT NULL,
+    created timestamp with time zone NOT NULL,
+    updated timestamp with time zone NOT NULL,
+    ip inet,
+    alloc_type integer NOT NULL,
+    subnet_id bigint,
+    user_id integer,
+    lease_time integer NOT NULL,
+    temp_expires_on timestamp with time zone
+);
 
 
 --
@@ -8066,7 +7513,8 @@ CREATE TABLE public.maasserver_switch (
     id bigint NOT NULL,
     created timestamp with time zone NOT NULL,
     updated timestamp with time zone NOT NULL,
-    target_image_id bigint
+    target_image_id bigint,
+    name character varying(255)
 );
 
 
@@ -8149,6 +7597,35 @@ CREATE SEQUENCE public.maasserver_template_id_seq
 --
 
 ALTER SEQUENCE public.maasserver_template_id_seq OWNED BY public.maasserver_template.id;
+
+
+--
+-- Name: maasserver_trustedsshhostkey; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.maasserver_trustedsshhostkey (
+    id bigint NOT NULL,
+    created timestamp with time zone NOT NULL,
+    updated timestamp with time zone NOT NULL,
+    host character varying(255) NOT NULL,
+    key_type character varying(64) NOT NULL,
+    public_key text NOT NULL,
+    label character varying(255)
+);
+
+
+--
+-- Name: maasserver_trustedsshhostkey_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.maasserver_trustedsshhostkey ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.maasserver_trustedsshhostkey_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
 
 
 --
@@ -8315,113 +7792,6 @@ CREATE TABLE public.maasserver_virtualblockdevice (
 
 
 --
--- Name: maasserver_virtualmachine; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_virtualmachine (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    identifier text NOT NULL,
-    pinned_cores integer[] NOT NULL,
-    unpinned_cores integer NOT NULL,
-    memory integer NOT NULL,
-    hugepages_backed boolean NOT NULL,
-    bmc_id bigint NOT NULL,
-    machine_id bigint,
-    project text NOT NULL
-);
-
-
---
--- Name: maasserver_virtualmachine_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_virtualmachine_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_virtualmachine_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_virtualmachine_id_seq OWNED BY public.maasserver_virtualmachine.id;
-
-
---
--- Name: maasserver_virtualmachinedisk; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_virtualmachinedisk (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    name character varying(255) NOT NULL,
-    size bigint NOT NULL,
-    backing_pool_id bigint,
-    block_device_id bigint,
-    vm_id bigint NOT NULL
-);
-
-
---
--- Name: maasserver_virtualmachinedisk_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_virtualmachinedisk_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_virtualmachinedisk_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_virtualmachinedisk_id_seq OWNED BY public.maasserver_virtualmachinedisk.id;
-
-
---
--- Name: maasserver_virtualmachineinterface; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_virtualmachineinterface (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    mac_address text,
-    attachment_type character varying(10) NOT NULL,
-    host_interface_id bigint,
-    vm_id bigint NOT NULL
-);
-
-
---
--- Name: maasserver_virtualmachineinterface_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_virtualmachineinterface_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_virtualmachineinterface_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_virtualmachineinterface_id_seq OWNED BY public.maasserver_virtualmachineinterface.id;
-
-
---
 -- Name: maasserver_vlan_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -8438,40 +7808,6 @@ CREATE SEQUENCE public.maasserver_vlan_id_seq
 --
 
 ALTER SEQUENCE public.maasserver_vlan_id_seq OWNED BY public.maasserver_vlan.id;
-
-
---
--- Name: maasserver_vmcluster; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.maasserver_vmcluster (
-    id bigint NOT NULL,
-    created timestamp with time zone NOT NULL,
-    updated timestamp with time zone NOT NULL,
-    name text NOT NULL,
-    project text NOT NULL,
-    pool_id integer,
-    zone_id bigint NOT NULL
-);
-
-
---
--- Name: maasserver_vmcluster_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.maasserver_vmcluster_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: maasserver_vmcluster_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.maasserver_vmcluster_id_seq OWNED BY public.maasserver_vmcluster.id;
 
 
 --
@@ -9409,13 +8745,6 @@ ALTER TABLE ONLY public.django_content_type ALTER COLUMN id SET DEFAULT nextval(
 
 
 --
--- Name: django_migrations id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.django_migrations ALTER COLUMN id SET DEFAULT nextval('public.django_migrations_id_seq'::regclass);
-
-
---
 -- Name: django_site id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9647,13 +8976,6 @@ ALTER TABLE ONLY public.maasserver_iprange ALTER COLUMN id SET DEFAULT nextval('
 
 
 --
--- Name: maasserver_largefile id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_largefile ALTER COLUMN id SET DEFAULT nextval('public.maasserver_largefile_id_seq'::regclass);
-
-
---
 -- Name: maasserver_licensekey id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9791,27 +9113,6 @@ ALTER TABLE ONLY public.maasserver_partition ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY public.maasserver_partitiontable ALTER COLUMN id SET DEFAULT nextval('public.maasserver_partitiontable_id_seq'::regclass);
-
-
---
--- Name: maasserver_podhints id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints ALTER COLUMN id SET DEFAULT nextval('public.maasserver_podhints_id_seq'::regclass);
-
-
---
--- Name: maasserver_podhints_nodes id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints_nodes ALTER COLUMN id SET DEFAULT nextval('public.maasserver_podhints_nodes_id_seq'::regclass);
-
-
---
--- Name: maasserver_podstoragepool id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podstoragepool ALTER COLUMN id SET DEFAULT nextval('public.maasserver_podstoragepool_id_seq'::regclass);
 
 
 --
@@ -9976,38 +9277,10 @@ ALTER TABLE ONLY public.maasserver_versionedtextfile ALTER COLUMN id SET DEFAULT
 
 
 --
--- Name: maasserver_virtualmachine id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine ALTER COLUMN id SET DEFAULT nextval('public.maasserver_virtualmachine_id_seq'::regclass);
-
-
---
--- Name: maasserver_virtualmachinedisk id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk ALTER COLUMN id SET DEFAULT nextval('public.maasserver_virtualmachinedisk_id_seq'::regclass);
-
-
---
--- Name: maasserver_virtualmachineinterface id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachineinterface ALTER COLUMN id SET DEFAULT nextval('public.maasserver_virtualmachineinterface_id_seq'::regclass);
-
-
---
 -- Name: maasserver_vlan id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.maasserver_vlan ALTER COLUMN id SET DEFAULT nextval('public.maasserver_vlan_id_seq'::regclass);
-
-
---
--- Name: maasserver_vmcluster id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_vmcluster ALTER COLUMN id SET DEFAULT nextval('public.maasserver_vmcluster_id_seq'::regclass);
 
 
 --
@@ -10142,7 +9415,7 @@ COPY openfga.tuple (store, object_type, object_id, relation, _user, user_type, u
 --
 
 COPY public.alembic_version (version_num) FROM stdin;
-0023
+0037
 \.
 
 
@@ -10798,413 +10071,6 @@ COPY public.django_content_type (id, app_label, model) FROM stdin;
 
 
 --
--- Data for Name: django_migrations; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.django_migrations (id, app, name, applied) FROM stdin;
-1	contenttypes	0001_initial	2021-11-19 12:40:42.824414+00
-2	auth	0001_initial	2021-11-19 12:40:42.858779+00
-3	auth	0002_auto_20151119_1629	2021-11-19 12:40:42.961604+00
-4	auth	0003_django_1_11_update	2021-11-19 12:40:42.982989+00
-5	auth	0004_user_email_allow_null	2021-11-19 12:40:42.99213+00
-6	auth	0005_auto_20200626_1049	2021-11-19 12:40:43.011789+00
-7	contenttypes	0002_remove_content_type_name	2021-11-19 12:40:43.030316+00
-8	piston3	0001_initial	2021-11-19 12:40:43.062801+00
-9	maasserver	0001_initial	2021-11-19 12:40:44.340749+00
-10	metadataserver	0001_initial	2021-11-19 12:40:44.570766+00
-11	maasserver	0002_remove_candidate_name_model	2021-11-19 12:40:44.582572+00
-12	maasserver	0003_add_node_type_to_node	2021-11-19 12:40:44.617527+00
-13	maasserver	0004_migrate_installable_to_node_type	2021-11-19 12:40:44.678379+00
-14	maasserver	0005_delete_installable_from_node	2021-11-19 12:40:44.706324+00
-15	maasserver	0006_add_lease_time_to_staticipaddress	2021-11-19 12:40:44.734773+00
-16	maasserver	0007_create_node_proxy_models	2021-11-19 12:40:44.745761+00
-17	maasserver	0008_use_new_arrayfield	2021-11-19 12:40:44.879861+00
-18	maasserver	0009_remove_routers_field_from_node	2021-11-19 12:40:44.910292+00
-19	maasserver	0010_add_dns_models	2021-11-19 12:40:45.10435+00
-20	maasserver	0011_domain_data	2021-11-19 12:40:45.23398+00
-21	maasserver	0012_drop_dns_fields	2021-11-19 12:40:45.349177+00
-22	maasserver	0013_remove_boot_type_from_node	2021-11-19 12:40:45.384578+00
-23	maasserver	0014_add_region_models	2021-11-19 12:40:45.594747+00
-24	maasserver	0015_add_bmc_model	2021-11-19 12:40:45.735538+00
-25	maasserver	0016_migrate_power_data_node_to_bmc	2021-11-19 12:40:45.917089+00
-26	maasserver	0017_remove_node_power_type	2021-11-19 12:40:45.951225+00
-27	maasserver	0018_add_dnsdata	2021-11-19 12:40:46.03917+00
-28	maasserver	0019_add_iprange	2021-11-19 12:40:46.085306+00
-29	maasserver	0020_nodegroup_to_rackcontroller	2021-11-19 12:40:46.203411+00
-30	maasserver	0021_nodegroupinterface_to_iprange	2021-11-19 12:40:46.280663+00
-31	maasserver	0022_extract_ip_for_bmcs	2021-11-19 12:40:46.355619+00
-32	maasserver	0023_add_ttl_field	2021-11-19 12:40:46.52367+00
-33	maasserver	0024_remove_nodegroupinterface	2021-11-19 12:40:47.168394+00
-34	maasserver	0025_create_node_system_id_sequence	2021-11-19 12:40:47.188836+00
-35	maasserver	0026_create_zone_serial_sequence	2021-11-19 12:40:47.194285+00
-36	maasserver	0027_replace_static_range_with_admin_reserved_ranges	2021-11-19 12:40:47.266471+00
-37	maasserver	0028_update_default_vlan_on_interface_and_subnet	2021-11-19 12:40:47.364843+00
-38	maasserver	0029_add_rdns_mode	2021-11-19 12:40:47.384279+00
-39	maasserver	0030_drop_all_old_funcs	2021-11-19 12:40:47.455476+00
-40	maasserver	0031_add_region_rack_rpc_conn_model	2021-11-19 12:40:47.690756+00
-41	maasserver	0032_loosen_vlan	2021-11-19 12:40:47.77097+00
-42	maasserver	0033_iprange_minor_changes	2021-11-19 12:40:47.865484+00
-43	maasserver	0034_rename_mount_params_as_mount_options	2021-11-19 12:40:47.916277+00
-44	maasserver	0035_convert_ether_wake_to_manual_power_type	2021-11-19 12:40:47.981797+00
-45	maasserver	0036_add_service_model	2021-11-19 12:40:48.064125+00
-46	maasserver	0037_node_last_image_sync	2021-11-19 12:40:48.104895+00
-47	maasserver	0038_filesystem_ramfs_tmpfs_support	2021-11-19 12:40:48.191633+00
-48	maasserver	0039_create_template_and_versionedtextfile_models	2021-11-19 12:40:48.218415+00
-49	maasserver	0040_fix_id_seq	2021-11-19 12:40:48.238787+00
-50	maasserver	0041_change_bmc_on_delete_to_set_null	2021-11-19 12:40:48.293066+00
-51	maasserver	0042_add_routable_rack_controllers_to_bmc	2021-11-19 12:40:48.485532+00
-52	maasserver	0043_dhcpsnippet	2021-11-19 12:40:48.545241+00
-53	maasserver	0044_remove_di_bootresourcefiles	2021-11-19 12:40:48.634506+00
-54	maasserver	0045_add_node_to_filesystem	2021-11-19 12:40:48.685887+00
-55	maasserver	0046_add_bridge_interface_type	2021-11-19 12:40:48.731426+00
-56	maasserver	0047_fix_spelling_of_degraded	2021-11-19 12:40:48.830138+00
-57	maasserver	0048_add_subnet_allow_proxy	2021-11-19 12:40:48.845873+00
-58	maasserver	0049_add_external_dhcp_present_to_vlan	2021-11-19 12:40:48.970804+00
-59	maasserver	0050_modify_external_dhcp_on_vlan	2021-11-19 12:40:49.134295+00
-60	maasserver	0051_space_fabric_unique	2021-11-19 12:40:49.397372+00
-61	maasserver	0052_add_codename_title_eol_to_bootresourcecache	2021-11-19 12:40:49.424495+00
-62	maasserver	0053_add_ownerdata_model	2021-11-19 12:40:49.516296+00
-63	maasserver	0054_controller	2021-11-19 12:40:49.524257+00
-64	maasserver	0055_dns_publications	2021-11-19 12:40:49.531248+00
-65	maasserver	0056_zone_serial_ownership	2021-11-19 12:40:49.538801+00
-66	maasserver	0057_initial_dns_publication	2021-11-19 12:40:49.60903+00
-67	maasserver	0058_bigger_integer_for_dns_publication_serial	2021-11-19 12:40:49.618122+00
-68	maasserver	0056_add_description_to_fabric_and_space	2021-11-19 12:40:49.77264+00
-69	maasserver	0057_merge	2021-11-19 12:40:49.775133+00
-70	maasserver	0059_merge	2021-11-19 12:40:49.77711+00
-71	maasserver	0060_amt_remove_mac_address	2021-11-19 12:40:49.851165+00
-72	maasserver	0061_maas_nodegroup_worker_to_maas	2021-11-19 12:40:49.925509+00
-73	maasserver	0062_fix_bootsource_daily_label	2021-11-19 12:40:50.006741+00
-74	maasserver	0063_remove_orphaned_bmcs_and_ips	2021-11-19 12:40:50.202739+00
-75	maasserver	0064_remove_unneeded_event_triggers	2021-11-19 12:40:50.270623+00
-76	maasserver	0065_larger_osystem_and_distro_series	2021-11-19 12:40:50.349286+00
-77	maasserver	0066_allow_squashfs	2021-11-19 12:40:50.359214+00
-78	maasserver	0067_add_size_to_largefile	2021-11-19 12:40:50.438721+00
-79	maasserver	0068_drop_node_system_id_sequence	2021-11-19 12:40:50.443859+00
-80	maasserver	0069_add_previous_node_status_to_node	2021-11-19 12:40:50.489576+00
-81	maasserver	0070_allow_null_vlan_on_interface	2021-11-19 12:40:50.551797+00
-82	maasserver	0071_ntp_server_to_ntp_servers	2021-11-19 12:40:50.556645+00
-83	maasserver	0072_packagerepository	2021-11-19 12:40:50.565478+00
-84	maasserver	0073_migrate_package_repositories	2021-11-19 12:40:50.707607+00
-85	maasserver	0072_update_status_and_previous_status	2021-11-19 12:40:50.78421+00
-86	maasserver	0074_merge	2021-11-19 12:40:50.786449+00
-87	maasserver	0075_modify_packagerepository	2021-11-19 12:40:50.816827+00
-88	maasserver	0076_interface_discovery_rescue_mode	2021-11-19 12:40:51.29596+00
-89	maasserver	0077_static_routes	2021-11-19 12:40:51.369006+00
-90	maasserver	0078_remove_packagerepository_description	2021-11-19 12:40:51.381147+00
-91	maasserver	0079_add_keysource_model	2021-11-19 12:40:51.476509+00
-92	maasserver	0080_change_packagerepository_url_type	2021-11-19 12:40:51.489155+00
-93	maasserver	0081_allow_larger_bootsourcecache_fields	2021-11-19 12:40:51.542287+00
-94	maasserver	0082_add_kflavor	2021-11-19 12:40:51.710735+00
-95	maasserver	0083_device_discovery	2021-11-19 12:40:51.781692+00
-96	maasserver	0084_add_default_user_to_node_model	2021-11-19 12:40:51.832194+00
-97	maasserver	0085_no_intro_on_upgrade	2021-11-19 12:40:51.910638+00
-98	maasserver	0086_remove_powerpc_from_ports_arches	2021-11-19 12:40:51.990442+00
-99	maasserver	0087_add_completed_intro_to_userprofile	2021-11-19 12:40:52.015202+00
-100	maasserver	0088_remove_node_disable_ipv4	2021-11-19 12:40:52.063366+00
-101	maasserver	0089_active_discovery	2021-11-19 12:40:52.291119+00
-102	maasserver	0090_bootloaders	2021-11-19 12:40:52.330415+00
-103	maasserver	0091_v2_to_v3	2021-11-19 12:40:52.415851+00
-104	maasserver	0092_rolling	2021-11-19 12:40:52.426926+00
-105	maasserver	0093_add_rdns_model	2021-11-19 12:40:52.507603+00
-106	maasserver	0094_add_unmanaged_subnets	2021-11-19 12:40:52.527624+00
-107	maasserver	0095_vlan_relay_vlan	2021-11-19 12:40:52.575416+00
-108	maasserver	0096_set_default_vlan_field	2021-11-19 12:40:52.631384+00
-109	maasserver	0097_node_chassis_storage_hints	2021-11-19 12:40:52.852524+00
-110	maasserver	0098_add_space_to_vlan	2021-11-19 12:40:52.911629+00
-111	maasserver	0099_set_default_vlan_field	2021-11-19 12:40:52.975955+00
-112	maasserver	0100_migrate_spaces_from_subnet_to_vlan	2021-11-19 12:40:53.065011+00
-113	maasserver	0101_filesystem_btrfs_support	2021-11-19 12:40:53.234079+00
-114	maasserver	0102_remove_space_from_subnet	2021-11-19 12:40:53.304323+00
-115	maasserver	0103_notifications	2021-11-19 12:40:53.356504+00
-116	maasserver	0104_notifications_dismissals	2021-11-19 12:40:53.420674+00
-117	metadataserver	0002_script_models	2021-11-19 12:40:53.730744+00
-118	maasserver	0105_add_script_sets_to_node_model	2021-11-19 12:40:53.911179+00
-119	maasserver	0106_testing_status	2021-11-19 12:40:54.13962+00
-120	maasserver	0107_chassis_to_pods	2021-11-19 12:40:54.559838+00
-121	maasserver	0108_generate_bmc_names	2021-11-19 12:40:54.64426+00
-122	maasserver	0109_bmc_names_unique	2021-11-19 12:40:54.682417+00
-123	maasserver	0110_notification_category	2021-11-19 12:40:54.705165+00
-124	maasserver	0111_remove_component_error	2021-11-19 12:40:54.714145+00
-125	maasserver	0112_update_notification	2021-11-19 12:40:54.853551+00
-126	maasserver	0113_set_filepath_limit_to_linux_max	2021-11-19 12:40:54.904174+00
-127	maasserver	0114_node_dynamic_to_creation_type	2021-11-19 12:40:55.13626+00
-128	maasserver	0115_additional_boot_resource_filetypes	2021-11-19 12:40:55.153205+00
-129	maasserver	0116_add_disabled_components_for_mirrors	2021-11-19 12:40:55.164284+00
-130	maasserver	0117_add_iscsi_block_device	2021-11-19 12:40:55.230126+00
-131	maasserver	0118_add_iscsi_storage_pod	2021-11-19 12:40:55.305038+00
-132	maasserver	0119_set_default_vlan_field	2021-11-19 12:40:55.398439+00
-133	maasserver	0120_bootsourcecache_extra	2021-11-19 12:40:55.40932+00
-134	maasserver	0121_relax_staticipaddress_unique_constraint	2021-11-19 12:40:55.498095+00
-135	maasserver	0122_make_virtualblockdevice_uuid_editable	2021-11-19 12:40:55.525899+00
-136	maasserver	0123_make_iprange_comment_default_to_empty_string	2021-11-19 12:40:55.573294+00
-137	maasserver	0124_staticipaddress_address_family_index	2021-11-19 12:40:55.583593+00
-138	maasserver	0125_add_switch_model	2021-11-19 12:40:55.652599+00
-139	maasserver	0126_add_controllerinfo_model	2021-11-19 12:40:55.804495+00
-140	maasserver	0127_nodemetadata	2021-11-19 12:40:55.902125+00
-141	maasserver	0128_events_created_index	2021-11-19 12:40:55.910201+00
-142	maasserver	0129_add_install_rackd_flag	2021-11-19 12:40:55.958036+00
-143	maasserver	0130_node_locked_flag	2021-11-19 12:40:56.012856+00
-144	maasserver	0131_update_event_model_for_audit_logs	2021-11-19 12:40:56.575592+00
-145	maasserver	0132_consistent_model_name_validation	2021-11-19 12:40:56.705325+00
-146	maasserver	0133_add_resourcepool_model	2021-11-19 12:40:56.722044+00
-147	maasserver	0134_create_default_resourcepool	2021-11-19 12:40:56.915219+00
-148	maasserver	0135_add_pool_reference_to_node	2021-11-19 12:40:57.23517+00
-149	maasserver	0136_add_user_role_models	2021-11-19 12:40:57.359211+00
-150	maasserver	0137_create_default_roles	2021-11-19 12:40:57.494462+00
-151	maasserver	0138_add_ip_and_user_agent_to_event_model	2021-11-19 12:40:57.598659+00
-152	maasserver	0139_add_endpoint_and_increase_user_agent_length_for_event	2021-11-19 12:40:57.713103+00
-153	maasserver	0140_add_usergroup_model	2021-11-19 12:40:57.924026+00
-154	maasserver	0141_add_default_usergroup	2021-11-19 12:40:58.132156+00
-155	maasserver	0142_pod_default_resource_pool	2021-11-19 12:40:58.708092+00
-156	maasserver	0143_blockdevice_firmware	2021-11-19 12:40:58.738474+00
-157	maasserver	0144_filesystem_zfsroot_support	2021-11-19 12:40:58.787936+00
-158	maasserver	0145_interface_firmware	2021-11-19 12:40:58.942118+00
-159	maasserver	0146_add_rootkey	2021-11-19 12:40:58.955765+00
-160	maasserver	0147_pod_zones	2021-11-19 12:40:59.027306+00
-161	maasserver	0148_add_tags_on_pods	2021-11-19 12:40:59.085931+00
-162	maasserver	0149_userprofile_auth_last_check	2021-11-19 12:40:59.123072+00
-163	maasserver	0150_add_pod_commit_ratios	2021-11-19 12:40:59.210989+00
-164	maasserver	0151_userprofile_is_local	2021-11-19 12:40:59.237346+00
-165	maasserver	0152_add_usergroup_local	2021-11-19 12:40:59.273197+00
-166	maasserver	0153_add_skip_bmc_config	2021-11-19 12:40:59.34225+00
-167	maasserver	0154_link_usergroup_role	2021-11-19 12:40:59.533655+00
-168	maasserver	0155_add_globaldefaults_model	2021-11-19 12:40:59.964278+00
-169	maasserver	0156_drop_ssh_unique_key_index	2021-11-19 12:41:00.004865+00
-170	maasserver	0157_drop_usergroup_and_role	2021-11-19 12:41:00.438749+00
-171	maasserver	0158_pod_default_pool_to_pod	2021-11-19 12:41:00.517242+00
-172	maasserver	0159_userprofile_auth_last_check_no_now_default	2021-11-19 12:41:00.546172+00
-173	maasserver	0160_pool_only_for_machines	2021-11-19 12:41:00.644982+00
-174	maasserver	0161_pod_storage_pools	2021-11-19 12:41:01.024573+00
-175	maasserver	0162_storage_pools_notification	2021-11-19 12:41:01.127099+00
-176	maasserver	0163_create_new_power_parameters_with_jsonfield	2021-11-19 12:41:01.219672+00
-177	maasserver	0164_copy_over_existing_power_parameters	2021-11-19 12:41:01.320742+00
-178	maasserver	0165_remove_and_rename_power_parameters	2021-11-19 12:41:01.535613+00
-179	maasserver	0166_auto_select_s390x_extra_arches	2021-11-19 12:41:01.634578+00
-180	maasserver	0167_add_pod_host	2021-11-19 12:41:01.70175+00
-181	maasserver	0168_add_pod_default_macvlan_mode	2021-11-19 12:41:01.750756+00
-182	maasserver	0169_find_pod_host	2021-11-19 12:41:01.754893+00
-183	maasserver	0170_add_subnet_allow_dns	2021-11-19 12:41:01.777208+00
-184	maasserver	0171_remove_pod_host	2021-11-19 12:41:01.854558+00
-185	maasserver	0172_partition_tags	2021-11-19 12:41:01.8685+00
-186	maasserver	0173_add_node_install_kvm	2021-11-19 12:41:02.092937+00
-187	maasserver	0174_add_user_id_and_node_system_id_for_events	2021-11-19 12:41:02.182792+00
-188	maasserver	0175_copy_user_id_and_node_system_id_for_events	2021-11-19 12:41:02.278096+00
-189	maasserver	0176_rename_user_id_migrate_to_user_id_for_events	2021-11-19 12:41:02.405644+00
-190	maasserver	0177_remove_unique_together_on_bmc	2021-11-19 12:41:02.453066+00
-191	maasserver	0178_break_apart_linked_bmcs	2021-11-19 12:41:02.554466+00
-192	maasserver	0179_rbacsync	2021-11-19 12:41:02.563308+00
-193	maasserver	0180_rbaclastsync	2021-11-19 12:41:02.572676+00
-194	maasserver	0181_packagerepository_disable_sources	2021-11-19 12:41:02.584713+00
-195	maasserver	0182_remove_duplicate_null_ips	2021-11-19 12:41:02.600768+00
-196	maasserver	0183_node_uuid	2021-11-19 12:41:02.657634+00
-197	maasserver	0184_add_ephemeral_deploy_setting_to_node	2021-11-19 12:41:02.717017+00
-198	maasserver	0185_vmfs6	2021-11-19 12:41:02.782762+00
-199	maasserver	0186_node_description	2021-11-19 12:41:02.835891+00
-200	maasserver	0187_status_messages_change_event_logging_levels	2021-11-19 12:41:02.936874+00
-201	maasserver	0192_event_node_no_set_null	2021-11-19 12:41:03.169205+00
-202	maasserver	0194_machine_listing_event_index	2021-11-19 12:41:03.217197+00
-203	maasserver	0188_network_testing	2021-11-19 12:41:03.353922+00
-204	maasserver	0189_staticipaddress_temp_expires_on	2021-11-19 12:41:03.387202+00
-205	maasserver	0190_bmc_clean_duplicates	2021-11-19 12:41:03.494379+00
-206	maasserver	0191_bmc_unique_power_type_and_parameters	2021-11-19 12:41:03.500855+00
-207	maasserver	0193_merge_maasserver_0191_1092	2021-11-19 12:41:03.503326+00
-208	maasserver	0195_merge_20190902_1357	2021-11-19 12:41:03.505799+00
-209	maasserver	0196_numa_model	2021-11-19 12:41:03.857158+00
-210	maasserver	0197_remove_duplicate_physical_interfaces	2021-11-19 12:41:03.962039+00
-211	maasserver	0198_interface_physical_unique_mac	2021-11-19 12:41:03.968275+00
-212	maasserver	0199_bootresource_tbz_txz	2021-11-19 12:41:03.980856+00
-213	maasserver	0200_interface_sriov_max_vf	2021-11-19 12:41:04.032233+00
-214	maasserver	0195_event_username_max_length	2021-11-19 12:41:04.148037+00
-215	maasserver	0201_merge_20191008_1426	2021-11-19 12:41:04.150753+00
-216	maasserver	0202_event_node_on_delete	2021-11-19 12:41:04.415722+00
-217	maasserver	0203_interface_node_name_duplicates_delete	2021-11-19 12:41:04.513428+00
-218	maasserver	0204_interface_node_name_unique_together	2021-11-19 12:41:04.562861+00
-219	maasserver	0205_pod_nodes	2021-11-19 12:41:04.640497+00
-220	maasserver	0206_remove_node_token	2021-11-19 12:41:04.721787+00
-221	maasserver	0207_notification_dismissable	2021-11-19 12:41:04.743513+00
-222	maasserver	0208_no_power_query_events	2021-11-19 12:41:04.846899+00
-223	maasserver	0209_default_partitiontable_gpt	2021-11-19 12:41:04.867675+00
-224	maasserver	0210_filepathfield_to_charfield	2021-11-19 12:41:04.91246+00
-225	maasserver	0211_jsonfield_default_callable	2021-11-19 12:41:05.008252+00
-226	maasserver	0212_notifications_fields	2021-11-19 12:41:05.07502+00
-227	maasserver	0213_virtual_machine	2021-11-19 12:41:05.247006+00
-228	maasserver	0214_virtualmachine_one_to_one	2021-11-19 12:41:05.336279+00
-229	maasserver	0215_numanode_hugepages	2021-11-19 12:41:05.590857+00
-230	maasserver	0216_remove_skip_bmc_config_column	2021-11-19 12:41:05.661625+00
-231	maasserver	0217_notification_dismissal_timestamp	2021-11-19 12:41:05.71417+00
-232	maasserver	0218_images_maas_io_daily_to_stable	2021-11-19 12:41:05.8216+00
-233	maasserver	0219_vm_nic_link	2021-11-19 12:41:05.907892+00
-234	maasserver	0220_nodedevice	2021-11-19 12:41:06.004318+00
-235	maasserver	0221_track_lxd_project	2021-11-19 12:41:06.219817+00
-236	maasserver	0222_replace_node_creation_type	2021-11-19 12:41:06.43745+00
-237	maasserver	0223_virtualmachine_blank_project	2021-11-19 12:41:06.847243+00
-238	maasserver	0224_virtual_machine_disk	2021-11-19 12:41:07.032887+00
-239	maasserver	0225_drop_rsd_pod	2021-11-19 12:41:07.148362+00
-240	maasserver	0226_drop_iscsi_storage	2021-11-19 12:41:07.247321+00
-241	maasserver	0227_drop_pod_local_storage	2021-11-19 12:41:07.343709+00
-242	maasserver	0228_drop_iscsiblockdevice	2021-11-19 12:41:07.350424+00
-243	maasserver	0229_drop_physicalblockdevice_storage_pool	2021-11-19 12:41:07.435156+00
-244	maasserver	0230_tag_kernel_opts_blank_instead_of_null	2021-11-19 12:41:07.453178+00
-245	maasserver	0231_bmc_version	2021-11-19 12:41:07.515054+00
-246	maasserver	0232_drop_controllerinfo_interface_fields	2021-11-19 12:41:07.606905+00
-247	maasserver	0233_drop_switch	2021-11-19 12:41:07.613541+00
-248	maasserver	0234_node_register_vmhost	2021-11-19 12:41:07.675696+00
-249	maasserver	0235_controllerinfo_versions_details	2021-11-19 12:41:08.164885+00
-250	maasserver	0236_controllerinfo_update_first_reported	2021-11-19 12:41:08.237173+00
-251	maasserver	0237_drop_controller_version_mismatch_notifications	2021-11-19 12:41:08.350623+00
-252	maasserver	0238_disable_boot_architectures	2021-11-19 12:41:08.374021+00
-253	maasserver	0239_add_iprange_specific_dhcp_snippets	2021-11-19 12:41:08.467242+00
-254	maasserver	0240_ownerdata_key_fix	2021-11-19 12:41:08.576326+00
-255	maasserver	0241_physical_interface_default_node_numanode	2021-11-19 12:41:08.806888+00
-256	maasserver	0242_forwarddnsserver	2021-11-19 12:41:08.936299+00
-257	maasserver	0243_node_dynamic_for_controller_and_vmhost	2021-11-19 12:41:09.0856+00
-258	maasserver	0244_controller_nodes_deployed	2021-11-19 12:41:09.483833+00
-259	maasserver	0245_bmc_power_parameters_index_hash	2021-11-19 12:41:09.635635+00
-260	maasserver	0246_bootresource_custom_base_type	2021-11-19 12:41:09.651438+00
-261	maasserver	0247_auto_20210915_1545	2021-11-19 12:41:09.769845+00
-262	maasserver	0248_auto_20211006_1829	2021-11-19 12:41:10.011088+00
-263	maasserver	0249_lxd_auth_metrics	2021-11-19 12:41:10.193577+00
-264	maasserver	0250_node_last_applied_storage_layout	2021-11-19 12:41:10.257785+00
-265	maasserver	0251_auto_20211027_2128	2021-11-19 12:41:10.383283+00
-266	metadataserver	0003_remove_noderesult	2021-11-19 12:41:10.497317+00
-267	metadataserver	0004_aborted_script_status	2021-11-19 12:41:10.519628+00
-268	metadataserver	0005_store_powerstate_on_scriptset_creation	2021-11-19 12:41:10.555844+00
-269	metadataserver	0006_scriptresult_combined_output	2021-11-19 12:41:10.582204+00
-270	metadataserver	0007_migrate-commissioningscripts	2021-11-19 12:41:10.887103+00
-271	metadataserver	0008_remove-commissioningscripts	2021-11-19 12:41:10.894502+00
-272	metadataserver	0009_remove_noderesult_schema	2021-11-19 12:41:10.902347+00
-273	metadataserver	0010_scriptresult_time_and_script_title	2021-11-19 12:41:10.957528+00
-274	metadataserver	0011_script_metadata	2021-11-19 12:41:11.051289+00
-275	metadataserver	0012_store_script_results	2021-11-19 12:41:11.091909+00
-276	metadataserver	0013_scriptresult_physicalblockdevice	2021-11-19 12:41:11.26438+00
-277	metadataserver	0014_rename_dhcp_unconfigured_ifaces	2021-11-19 12:41:11.379168+00
-278	metadataserver	0015_migrate_storage_tests	2021-11-19 12:41:11.494202+00
-279	metadataserver	0016_script_model_fw_update_and_hw_config	2021-11-19 12:41:11.542797+00
-280	metadataserver	0017_store_requested_scripts	2021-11-19 12:41:11.607621+00
-281	metadataserver	0018_script_result_skipped	2021-11-19 12:41:11.635989+00
-282	metadataserver	0019_add_script_result_suppressed	2021-11-19 12:41:11.674488+00
-283	metadataserver	0020_network_testing	2021-11-19 12:41:11.795427+00
-284	metadataserver	0021_scriptresult_applying_netconf	2021-11-19 12:41:11.839799+00
-285	metadataserver	0022_internet-connectivity-network-validation	2021-11-19 12:41:11.848087+00
-286	metadataserver	0023_reorder_network_scripts	2021-11-19 12:41:11.955536+00
-287	metadataserver	0024_reorder_commissioning_scripts	2021-11-19 12:41:12.070671+00
-288	metadataserver	0025_nodedevice	2021-11-19 12:41:12.085411+00
-289	metadataserver	0026_drop_ipaddr_script	2021-11-19 12:41:12.40226+00
-290	piston3	0002_auto_20151209_1652	2021-11-19 12:41:12.422797+00
-291	piston3	0003_piston_nonce_index	2021-11-19 12:41:12.433498+00
-292	sessions	0001_initial	2021-11-19 12:41:12.444821+00
-293	sites	0001_initial	2021-11-19 12:41:12.455763+00
-294	sites	0002_alter_domain_unique	2021-11-19 12:41:12.467536+00
-295	maasserver	0252_drop_fannetwork	2021-11-26 17:02:43.267105+00
-296	maasserver	0253_nodeconfig	2022-03-01 15:55:02.690198+00
-297	maasserver	0254_default_nodeconfig_devices	2022-03-01 15:55:02.735735+00
-298	maasserver	0255_node_current_config	2022-03-01 15:55:02.863062+00
-299	maasserver	0256_blockdevice_nodeconfig_only	2022-03-01 15:55:02.882362+00
-300	maasserver	0257_filesystem_populate_node_config_id	2022-03-01 15:55:02.892658+00
-301	maasserver	0258_filesystem_nodeconfig_only	2022-03-01 15:55:03.355721+00
-302	maasserver	0259_add_hardware_sync_flag	2022-03-01 15:55:03.478532+00
-303	maasserver	0260_drop_maas_support_views	2022-03-01 15:55:03.536395+00
-304	maasserver	0261_interface_nodeconfig_only	2022-03-01 15:55:03.547634+00
-305	maasserver	0262_nodeconfig_link_replace_node	2022-03-01 15:55:04.117676+00
-306	maasserver	0263_vlan_racks_on_delete	2022-03-01 15:55:04.573912+00
-307	maasserver	0264_nodedevice_nodeconfig_link	2022-03-01 15:55:04.795457+00
-308	maasserver	0265_nodedevice_nodeconfig_migrate	2022-03-01 15:55:04.81799+00
-309	maasserver	0266_nodedevice_unlink_node	2022-03-01 15:55:05.13206+00
-310	maastesting	0001_initial	2022-03-08 14:01:53.649122+00
-311	maasserver	0267_add_machine_specific_sync_interval_fields	2022-06-13 14:48:40.504678+00
-312	maasserver	0268_partition_index	2022-06-13 14:48:40.670232+00
-313	maasserver	0269_interface_idx_include_nodeconfig	2022-06-13 14:48:40.68281+00
-314	maasserver	0270_storage_uuid_drop_unique	2022-06-13 14:48:40.781473+00
-315	maasserver	0271_interface_unique	2022-06-13 14:48:40.900017+00
-316	maasserver	0272_virtualmachine_resources_unique	2022-06-13 14:48:41.864679+00
-317	maasserver	0273_ipaddress_defaults	2022-06-13 14:48:41.907316+00
-318	maasserver	0274_audit_log_add_endpoint_cli_type	2022-06-13 14:48:41.94551+00
-319	maasserver	0275_interface_children	2022-06-13 14:48:42.048243+00
-320	maasserver	0276_bmc_autodetect_metric	2022-06-13 14:48:42.290065+00
-321	maasserver	0277_replace_nullbooleanfield	2022-06-13 14:48:42.308843+00
-322	metadataserver	0027_reorder_machine_resources_script	2022-06-13 14:48:42.420499+00
-323	metadataserver	0028_scriptset_requested_scripts_rename	2022-06-13 14:48:42.503381+00
-324	metadataserver	0029_scriptset_tags_cleanup	2022-06-13 14:48:42.510804+00
-325	metadataserver	0030_scriptresult_script_link	2022-06-13 14:48:42.738442+00
-326	auth	0006_default_auto_field	2022-07-07 11:09:02.38743+00
-327	maasserver	0278_generic_jsonfield	2022-07-07 11:09:02.563813+00
-328	metadataserver	0031_id_field_bigint	2022-07-07 11:09:03.047446+00
-329	metadataserver	0032_default_auto_field	2022-07-07 11:09:03.68517+00
-330	maasserver	0279_store_vpd_metadata_for_nodedevice	2022-09-05 00:16:36.329151+00
-331	maasserver	0280_set_parent_for_existing_vms	2022-09-15 11:24:45.945397+00
-332	maasserver	0281_secret_model	2022-09-15 11:24:45.959926+00
-333	maasserver	0282_rpc_shared_secret_to_secret	2022-10-03 12:52:26.794349+00
-334	maasserver	0283_migrate_tls_secrets	2022-10-03 12:52:26.80416+00
-335	maasserver	0284_migrate_more_global_secrets	2022-10-03 12:52:26.811989+00
-336	maasserver	0285_migrate_external_auth_secrets	2022-10-06 11:12:27.640004+00
-337	metadataserver	0033_remove_nodekey_key	2022-10-07 06:51:34.349659+00
-338	maasserver	0286_node_deploy_metadata	2022-10-11 03:29:32.800937+00
-339	maasserver	0287_add_controller_info_vault_flag	2022-10-15 03:29:44.399652+00
-340	maasserver	0288_rootkey_material_secret	2022-10-21 03:29:26.788885+00
-341	maasserver	0289_vault_secret	2022-10-28 03:29:40.716763+00
-342	maasserver	0290_migrate_node_power_parameters	2022-11-19 03:29:31.92822+00
-343	maasserver	0291_rdns_hostnames_as_array	2023-01-19 03:29:20.405694+00
-344	maasserver	0292_use_builtin_json_field	2023-01-24 03:29:54.34659+00
-345	metadataserver	0034_use_builtin_json_field	2023-01-24 03:29:54.467889+00
-346	maasserver	0293_drop_verbose_regex_validator	2023-02-28 03:29:15.412014+00
-347	maasserver	0294_keyring_data_binary_field	2023-03-01 03:29:34.859599+00
-348	maasserver	0295_macaddress_text_field	2023-03-04 03:29:30.976082+00
-349	metadataserver	0035_move_metadata_node_models	2023-04-27 03:30:37.453124+00
-350	maasserver	0296_move_metadata_node_models	2023-04-27 03:30:37.656471+00
-351	metadataserver	0036_move_metadata_script_models	2023-04-28 03:30:33.711429+00
-352	maasserver	0297_move_metadata_script_models	2023-04-28 03:30:34.516888+00
-353	maasserver	0298_current_script_set_foreign_keys_drop_indexes	2023-04-28 03:30:34.954887+00
-354	maasserver	0299_current_script_set_foreign_keys_cleanup	2023-04-28 03:30:34.967579+00
-355	maasserver	0300_current_script_set_foreign_keys_readd	2023-04-28 03:30:35.35594+00
-356	maasserver	0301_discovery_ignore_fks	2023-05-03 03:30:38.164577+00
-357	maasserver	0302_big_auto_field	2023-05-03 03:30:46.026112+00
-358	piston3	0004_big_auto_field	2023-05-03 03:30:46.539848+00
-359	maasserver	0303_interface_params_cleanups	2023-05-12 03:30:35.152079+00
-360	maasserver	0304_interface_params_no_autoconf	2023-05-12 03:30:35.161528+00
-361	maasserver	0305_add_temporal_schema	2023-08-25 09:27:56.827957+00
-362	maasserver	0306_diskless_ephemeral_deploy	2023-09-01 03:30:49.394747+00
-363	maasserver	0307_bootresource_type_drop_generated	2023-09-05 03:30:35.621467+00
-364	maasserver	0308_remove_images_from_db	2023-09-05 03:30:35.88739+00
-365	maasserver	0309_drop_bootloader_filetype	2023-09-06 03:30:38.148484+00
-366	maasserver	0310_rootfs_image_extensions	2023-09-15 03:30:27.345312+00
-367	maasserver	0311_image_sync_tracking	2023-09-28 03:30:52.503645+00
-368	maasserver	0312_release_script_type	2023-10-24 03:52:07.798195+00
-369	maasserver	0313_add_superuser_flag_to_existing_sysuser	2023-10-24 14:17:19.969776+00
-370	maasserver	0314_bootresourcefile_sha256_index	2023-11-02 03:30:47.980664+00
-371	maasserver	0315_add_current_release_script_set_to_node_model	2023-11-28 13:29:59.274246+00
-372	maasserver	0316_add_defaultresource_table	2024-03-06 03:31:14.227521+00
-373	maasserver	0317_migrate_defaultresource_zone	2024-03-06 03:31:14.238827+00
-374	maasserver	0318_add_port_to_forward_dns_servers	2024-03-17 03:30:45.589405+00
-375	maasserver	0319_merge_0304_and_0318	2024-03-20 10:17:51.582553+00
-376	maasserver	0320_current_script_set_foreign_keys_drop_indexes	2024-03-20 10:17:51.918962+00
-377	maasserver	0321_current_script_set_foreign_keys_cleanup	2024-03-20 10:17:51.927243+00
-378	maasserver	0322_current_script_set_foreign_keys_readd	2024-03-20 10:17:52.193804+00
-379	maasserver	0323_add_bootresource_alias_column	2024-05-22 03:30:53.729029+00
-380	maasserver	0324_populate_distro_alias	2024-05-24 03:30:57.883427+00
-381	maasserver	0325_foreign_key_drop	2024-05-28 12:00:15.12313+00
-382	maasserver	0326_foreign_key_cleanup	2024-05-28 12:00:15.576421+00
-383	maasserver	0327_foreign_key_readd	2024-05-28 12:00:16.543243+00
-384	maasserver	0328_merge_0327_and_0324	2024-05-28 19:46:08.641012+00
-385	maasserver	0329_add_reserved_ip_model	2024-06-15 03:30:52.566813+00
-386	maasserver	0330_bootresourcefile_filename_on_disk	2024-09-06 03:29:42.181597+00
-387	maasserver	0331_merge_322_330	2024-09-06 03:29:42.183811+00
-388	maasserver	0332_node_enable_kernel_crash_dump	2024-10-01 03:29:32.748129+00
-389	maasserver	0333_migrate_20_maas_03_machine_resources	2024-10-08 03:29:47.744096+00
-390	maasserver	0334_dnspublication_update	2024-10-19 03:30:09.373532+00
-391	maasserver	0335_reservedip_remove_vlan_update_mac	2024-10-23 03:29:40.217669+00
-392	maasserver	0336_remove_bmc_name_unique	2024-10-24 03:30:13.161462+00
-393	maasserver	0337_alter_interface_name	2024-12-07 03:29:56.132482+00
-394	maasserver	0338_add_protocol_sshkey	2025-01-10 03:30:39.961001+00
-395	maasserver	0339_migrate_keysource_table	2025-01-10 03:30:40.046038+00
-396	maasserver	0340_drop_keysource_table	2025-01-10 03:30:40.140181+00
-397	maasserver	0341_add_is_dpu_to_node	2025-03-21 03:30:33.971309+00
-398	maasserver	0342_add_alembic_table	2025-04-18 12:27:51.551723+00
-399	maasserver	0343_goodbye_django	2025-04-18 12:27:51.554786+00
-\.
-
-
---
 -- Data for Name: django_session; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -11241,7 +10107,7 @@ COPY public.maasserver_blockdevice (id, created, updated, name, id_path, size, b
 -- Data for Name: maasserver_bmc; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_bmc (id, created, updated, power_type, ip_address_id, architectures, bmc_type, capabilities, cores, cpu_speed, local_storage, memory, name, pool_id, zone_id, tags, cpu_over_commit_ratio, memory_over_commit_ratio, default_storage_pool_id, power_parameters, default_macvlan_mode, version, created_with_cert_expiration_days, created_with_maas_generated_cert, created_with_trust_password, created_by_commissioning) FROM stdin;
+COPY public.maasserver_bmc (id, created, updated, power_type, ip_address_id, power_parameters, created_by_commissioning) FROM stdin;
 \.
 
 
@@ -11265,7 +10131,7 @@ COPY public.maasserver_bootresource (id, created, updated, rtype, name, architec
 -- Data for Name: maasserver_bootresourcefile; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_bootresourcefile (id, created, updated, filename, filetype, extra, largefile_id, resource_set_id, sha256, size, filename_on_disk) FROM stdin;
+COPY public.maasserver_bootresourcefile (id, created, updated, filename, filetype, extra, resource_set_id, sha256, size, filename_on_disk) FROM stdin;
 \.
 
 
@@ -11348,7 +10214,7 @@ COPY public.maasserver_config (id, name, value) FROM stdin;
 -- Data for Name: maasserver_controllerinfo; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_controllerinfo (created, updated, node_id, version, install_type, snap_cohort, snap_revision, snap_update_revision, update_origin, update_version, update_first_reported, vault_configured) FROM stdin;
+COPY public.maasserver_controllerinfo (created, updated, node_id, version, snap_cohort, snap_revision, snap_update_revision, update_origin, update_version, update_first_reported, vault_configured) FROM stdin;
 \.
 
 
@@ -11525,14 +10391,6 @@ COPY public.maasserver_iprange (id, created, updated, type, start_ip, end_ip, co
 
 
 --
--- Data for Name: maasserver_largefile; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_largefile (id, created, updated, sha256, total_size, content, size) FROM stdin;
-\.
-
-
---
 -- Data for Name: maasserver_licensekey; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -11560,7 +10418,7 @@ COPY public.maasserver_neighbour (id, created, updated, ip, "time", vid, count, 
 -- Data for Name: maasserver_node; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_node (id, created, updated, system_id, hostname, status, bios_boot_method, osystem, distro_series, architecture, min_hwe_kernel, hwe_kernel, agent_name, error_description, cpu_count, memory, swap_size, power_state, power_state_updated, error, netboot, license_key, boot_cluster_ip, enable_ssh, skip_networking, skip_storage, boot_interface_id, gateway_link_ipv4_id, gateway_link_ipv6_id, owner_id, parent_id, zone_id, boot_disk_id, node_type, domain_id, dns_process_id, bmc_id, address_ttl, status_expires, power_state_queried, url, managing_process_id, last_image_sync, previous_status, default_user, cpu_speed, current_commissioning_script_set_id, current_installation_script_set_id, current_testing_script_set_id, install_rackd, locked, pool_id, instance_power_parameters, install_kvm, hardware_uuid, ephemeral_deploy, description, dynamic, register_vmhost, last_applied_storage_layout, current_config_id, enable_hw_sync, last_sync, sync_interval, current_release_script_set_id, enable_kernel_crash_dump, is_dpu, current_deployment_script_set_id) FROM stdin;
+COPY public.maasserver_node (id, created, updated, system_id, hostname, status, bios_boot_method, osystem, distro_series, architecture, min_hwe_kernel, hwe_kernel, agent_name, error_description, cpu_count, memory, swap_size, power_state, power_state_updated, error, netboot, license_key, boot_cluster_ip, enable_ssh, skip_networking, skip_storage, boot_interface_id, gateway_link_ipv4_id, gateway_link_ipv6_id, owner_id, parent_id, zone_id, boot_disk_id, node_type, domain_id, dns_process_id, bmc_id, address_ttl, status_expires, power_state_queried, url, managing_process_id, last_image_sync, previous_status, default_user, cpu_speed, current_commissioning_script_set_id, current_installation_script_set_id, current_testing_script_set_id, locked, pool_id, instance_power_parameters, hardware_uuid, ephemeral_deploy, description, dynamic, last_applied_storage_layout, current_config_id, enable_hw_sync, last_sync, sync_interval, current_release_script_set_id, enable_kernel_crash_dump, is_dpu, current_deployment_script_set_id) FROM stdin;
 \.
 
 
@@ -11664,7 +10522,7 @@ COPY public.maasserver_numanodehugepages (id, created, updated, page_size, total
 -- Data for Name: maasserver_oidc_provider; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_oidc_provider (id, created, updated, name, client_id, client_secret, issuer_url, redirect_uri, scopes, enabled, metadata, token_type) FROM stdin;
+COPY public.maasserver_oidc_provider (id, created, updated, name, client_id, client_secret, issuer_url, redirect_uri, scopes, enabled, metadata, token_type, vendor, config) FROM stdin;
 \.
 
 
@@ -11731,30 +10589,6 @@ COPY public.maasserver_partitiontable (id, created, updated, table_type, block_d
 --
 
 COPY public.maasserver_physicalblockdevice (blockdevice_ptr_id, model, serial, firmware_version, numa_node_id) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_podhints; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_podhints (id, cores, memory, local_storage, pod_id, cpu_speed, cluster_id) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_podhints_nodes; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_podhints_nodes (id, podhints_id, node_id) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_podstoragepool; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_podstoragepool (id, name, pool_id, pool_type, path, storage, pod_id) FROM stdin;
 \.
 
 
@@ -11939,7 +10773,7 @@ COPY public.maasserver_subnet (id, created, updated, name, cidr, gateway_ip, dns
 -- Data for Name: maasserver_switch; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.maasserver_switch (id, created, updated, target_image_id) FROM stdin;
+COPY public.maasserver_switch (id, created, updated, target_image_id, name) FROM stdin;
 \.
 
 
@@ -11956,6 +10790,14 @@ COPY public.maasserver_tag (id, created, updated, name, definition, comment, ker
 --
 
 COPY public.maasserver_template (id, created, updated, filename, default_version_id, version_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: maasserver_trustedsshhostkey; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+COPY public.maasserver_trustedsshhostkey (id, created, updated, host, key_type, public_key, label) FROM stdin;
 \.
 
 
@@ -12002,42 +10844,10 @@ COPY public.maasserver_virtualblockdevice (blockdevice_ptr_id, uuid, filesystem_
 
 
 --
--- Data for Name: maasserver_virtualmachine; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_virtualmachine (id, created, updated, identifier, pinned_cores, unpinned_cores, memory, hugepages_backed, bmc_id, machine_id, project) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_virtualmachinedisk; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_virtualmachinedisk (id, created, updated, name, size, backing_pool_id, block_device_id, vm_id) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_virtualmachineinterface; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_virtualmachineinterface (id, created, updated, mac_address, attachment_type, host_interface_id, vm_id) FROM stdin;
-\.
-
-
---
 -- Data for Name: maasserver_vlan; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 COPY public.maasserver_vlan (id, created, updated, name, vid, mtu, fabric_id, dhcp_on, primary_rack_id, secondary_rack_id, external_dhcp, description, relay_vlan_id, space_id) FROM stdin;
-\.
-
-
---
--- Data for Name: maasserver_vmcluster; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.maasserver_vmcluster (id, created, updated, name, project, pool_id, zone_id) FROM stdin;
 \.
 
 
@@ -12483,13 +11293,6 @@ SELECT pg_catalog.setval('public.django_content_type_id_seq', 119, true);
 
 
 --
--- Name: django_migrations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.django_migrations_id_seq', 399, true);
-
-
---
 -- Name: django_site_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
@@ -12742,13 +11545,6 @@ SELECT pg_catalog.setval('public.maasserver_iprange_id_seq', 1, false);
 
 
 --
--- Name: maasserver_largefile_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_largefile_id_seq', 1, false);
-
-
---
 -- Name: maasserver_licensekey_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
@@ -12914,27 +11710,6 @@ SELECT pg_catalog.setval('public.maasserver_partition_id_seq', 1, false);
 --
 
 SELECT pg_catalog.setval('public.maasserver_partitiontable_id_seq', 1, false);
-
-
---
--- Name: maasserver_podhints_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_podhints_id_seq', 1, false);
-
-
---
--- Name: maasserver_podhints_nodes_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_podhints_nodes_id_seq', 1, false);
-
-
---
--- Name: maasserver_podstoragepool_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_podstoragepool_id_seq', 1, false);
 
 
 --
@@ -13106,6 +11881,13 @@ SELECT pg_catalog.setval('public.maasserver_template_id_seq', 1, false);
 
 
 --
+-- Name: maasserver_trustedsshhostkey_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+--
+
+SELECT pg_catalog.setval('public.maasserver_trustedsshhostkey_id_seq', 1, false);
+
+
+--
 -- Name: maasserver_usergroup_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
@@ -13127,38 +11909,10 @@ SELECT pg_catalog.setval('public.maasserver_versionedtextfile_id_seq', 1, false)
 
 
 --
--- Name: maasserver_virtualmachine_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_virtualmachine_id_seq', 1, false);
-
-
---
--- Name: maasserver_virtualmachinedisk_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_virtualmachinedisk_id_seq', 1, false);
-
-
---
--- Name: maasserver_virtualmachineinterface_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_virtualmachineinterface_id_seq', 1, false);
-
-
---
 -- Name: maasserver_vlan_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
 SELECT pg_catalog.setval('public.maasserver_vlan_id_seq', 1, false);
-
-
---
--- Name: maasserver_vmcluster_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-SELECT pg_catalog.setval('public.maasserver_vmcluster_id_seq', 1, false);
 
 
 --
@@ -13419,14 +12173,6 @@ ALTER TABLE ONLY public.django_content_type
 
 ALTER TABLE ONLY public.django_content_type
     ADD CONSTRAINT django_content_type_pkey PRIMARY KEY (id);
-
-
---
--- Name: django_migrations django_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.django_migrations
-    ADD CONSTRAINT django_migrations_pkey PRIMARY KEY (id);
 
 
 --
@@ -13958,22 +12704,6 @@ ALTER TABLE ONLY public.maasserver_iprange
 
 
 --
--- Name: maasserver_largefile maasserver_largefile_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_largefile
-    ADD CONSTRAINT maasserver_largefile_pkey PRIMARY KEY (id);
-
-
---
--- Name: maasserver_largefile maasserver_largefile_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_largefile
-    ADD CONSTRAINT maasserver_largefile_sha256_key UNIQUE (sha256);
-
-
---
 -- Name: maasserver_licensekey maasserver_licensekey_osystem_distro_series_cb73fc24_uniq; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14334,46 +13064,6 @@ ALTER TABLE ONLY public.maasserver_physicalblockdevice
 
 
 --
--- Name: maasserver_podhints_nodes maasserver_podhints_nodes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints_nodes
-    ADD CONSTRAINT maasserver_podhints_nodes_pkey PRIMARY KEY (id);
-
-
---
--- Name: maasserver_podhints_nodes maasserver_podhints_nodes_podhints_id_node_id_785b70a7_uniq; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints_nodes
-    ADD CONSTRAINT maasserver_podhints_nodes_podhints_id_node_id_785b70a7_uniq UNIQUE (podhints_id, node_id);
-
-
---
--- Name: maasserver_podhints maasserver_podhints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints
-    ADD CONSTRAINT maasserver_podhints_pkey PRIMARY KEY (id);
-
-
---
--- Name: maasserver_podhints maasserver_podhints_pod_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints
-    ADD CONSTRAINT maasserver_podhints_pod_id_key UNIQUE (pod_id);
-
-
---
--- Name: maasserver_podstoragepool maasserver_podstoragepool_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podstoragepool
-    ADD CONSTRAINT maasserver_podstoragepool_pkey PRIMARY KEY (id);
-
-
---
 -- Name: maasserver_rack maasserver_rack_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14694,6 +13384,14 @@ ALTER TABLE ONLY public.maasserver_template
 
 
 --
+-- Name: maasserver_trustedsshhostkey maasserver_trustedsshhostkey_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maasserver_trustedsshhostkey
+    ADD CONSTRAINT maasserver_trustedsshhostkey_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: maasserver_usergroup maasserver_usergroup_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14750,54 +13448,6 @@ ALTER TABLE ONLY public.maasserver_virtualblockdevice
 
 
 --
--- Name: maasserver_virtualmachine maasserver_virtualmachin_bmc_id_identifier_projec_29edbd12_uniq; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine
-    ADD CONSTRAINT maasserver_virtualmachin_bmc_id_identifier_projec_29edbd12_uniq UNIQUE (bmc_id, identifier, project);
-
-
---
--- Name: maasserver_virtualmachine maasserver_virtualmachine_machine_id_22da40a9_uniq; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine
-    ADD CONSTRAINT maasserver_virtualmachine_machine_id_22da40a9_uniq UNIQUE (machine_id);
-
-
---
--- Name: maasserver_virtualmachine maasserver_virtualmachine_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine
-    ADD CONSTRAINT maasserver_virtualmachine_pkey PRIMARY KEY (id);
-
-
---
--- Name: maasserver_virtualmachinedisk maasserver_virtualmachinedisk_block_device_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk
-    ADD CONSTRAINT maasserver_virtualmachinedisk_block_device_id_key UNIQUE (block_device_id);
-
-
---
--- Name: maasserver_virtualmachinedisk maasserver_virtualmachinedisk_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk
-    ADD CONSTRAINT maasserver_virtualmachinedisk_pkey PRIMARY KEY (id);
-
-
---
--- Name: maasserver_virtualmachineinterface maasserver_virtualmachineinterface_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachineinterface
-    ADD CONSTRAINT maasserver_virtualmachineinterface_pkey PRIMARY KEY (id);
-
-
---
 -- Name: maasserver_vlan maasserver_vlan_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14811,22 +13461,6 @@ ALTER TABLE ONLY public.maasserver_vlan
 
 ALTER TABLE ONLY public.maasserver_vlan
     ADD CONSTRAINT maasserver_vlan_vid_fabric_id_881db3fa_uniq UNIQUE (vid, fabric_id);
-
-
---
--- Name: maasserver_vmcluster maasserver_vmcluster_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_vmcluster
-    ADD CONSTRAINT maasserver_vmcluster_name_key UNIQUE (name);
-
-
---
--- Name: maasserver_vmcluster maasserver_vmcluster_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_vmcluster
-    ADD CONSTRAINT maasserver_vmcluster_pkey PRIMARY KEY (id);
 
 
 --
@@ -14971,6 +13605,14 @@ ALTER TABLE ONLY public.piston3_nonce
 
 ALTER TABLE ONLY public.piston3_token
     ADD CONSTRAINT piston3_token_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: maasserver_trustedsshhostkey uq_trusted_host_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maasserver_trustedsshhostkey
+    ADD CONSTRAINT uq_trusted_host_key UNIQUE (host, key_type, public_key);
 
 
 --
@@ -15456,20 +14098,6 @@ CREATE INDEX maasserver_blockdevice_node_config_id_5b310b67 ON public.maasserver
 
 
 --
--- Name: maasserver_bmc_default_pool_id_848e4429; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_bmc_default_pool_id_848e4429 ON public.maasserver_bmc USING btree (pool_id);
-
-
---
--- Name: maasserver_bmc_default_storage_pool_id_5f48762b; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_bmc_default_storage_pool_id_5f48762b ON public.maasserver_bmc USING btree (default_storage_pool_id);
-
-
---
 -- Name: maasserver_bmc_ip_address_id_79362d14; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -15494,14 +14122,7 @@ CREATE INDEX maasserver_bmc_power_type_93755dda_like ON public.maasserver_bmc US
 -- Name: maasserver_bmc_power_type_parameters_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX maasserver_bmc_power_type_parameters_idx ON public.maasserver_bmc USING btree (power_type, md5((power_parameters)::text)) WHERE ((power_type)::text <> 'manual'::text);
-
-
---
--- Name: maasserver_bmc_zone_id_774ea0de; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_bmc_zone_id_774ea0de ON public.maasserver_bmc USING btree (zone_id);
+CREATE UNIQUE INDEX maasserver_bmc_power_type_parameters_idx ON public.maasserver_bmc USING btree (power_type, public.digest((power_parameters)::text, 'sha256'::text)) WHERE ((power_type)::text <> 'manual'::text);
 
 
 --
@@ -15516,13 +14137,6 @@ CREATE INDEX maasserver_bmcroutablerack_bmc_id_27dedd10 ON public.maasserver_bmc
 --
 
 CREATE INDEX maasserver_bmcroutablerack_rack_controller_id_1a3ffa6e ON public.maasserver_bmcroutablerackcontrollerrelationship USING btree (rack_controller_id);
-
-
---
--- Name: maasserver_bootresourcefile_largefile_id_cf035187; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_bootresourcefile_largefile_id_cf035187 ON public.maasserver_bootresourcefile USING btree (largefile_id);
 
 
 --
@@ -15862,13 +14476,6 @@ CREATE INDEX maasserver_iprange_user_id_5d0f7718 ON public.maasserver_iprange US
 
 
 --
--- Name: maasserver_largefile_sha256_40052db0_like; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_largefile_sha256_40052db0_like ON public.maasserver_largefile USING btree (sha256 varchar_pattern_ops);
-
-
---
 -- Name: maasserver_mdns_interface_id_ef297041; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -16184,34 +14791,6 @@ CREATE INDEX maasserver_physicalblockdevice_numa_node_id_8bd61f48 ON public.maas
 
 
 --
--- Name: maasserver_podhints_cluster_id_b526f79f; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_podhints_cluster_id_b526f79f ON public.maasserver_podhints USING btree (cluster_id);
-
-
---
--- Name: maasserver_podhints_nodes_node_id_7e2e56a4; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_podhints_nodes_node_id_7e2e56a4 ON public.maasserver_podhints_nodes USING btree (node_id);
-
-
---
--- Name: maasserver_podhints_nodes_podhints_id_df1bafb3; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_podhints_nodes_podhints_id_df1bafb3 ON public.maasserver_podhints_nodes USING btree (podhints_id);
-
-
---
--- Name: maasserver_podstoragepool_pod_id_11db94aa; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_podstoragepool_pod_id_11db94aa ON public.maasserver_podstoragepool USING btree (pod_id);
-
-
---
 -- Name: maasserver_rbaclastsync_resource_type_fb031e5a_like; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -16429,69 +15008,6 @@ CREATE INDEX maasserver_virtualblockdevice_filesystem_group_id_405a7fc4 ON publi
 
 
 --
--- Name: maasserver_virtualmachine_bmc_id_e2b4f381; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_virtualmachine_bmc_id_e2b4f381 ON public.maasserver_virtualmachine USING btree (bmc_id);
-
-
---
--- Name: maasserver_virtualmachinedisk_backing_pool_id_2fe2f82c; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_virtualmachinedisk_backing_pool_id_2fe2f82c ON public.maasserver_virtualmachinedisk USING btree (backing_pool_id);
-
-
---
--- Name: maasserver_virtualmachinedisk_bdev_uniq; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX maasserver_virtualmachinedisk_bdev_uniq ON public.maasserver_virtualmachinedisk USING btree (vm_id, name, block_device_id) WHERE (block_device_id IS NOT NULL);
-
-
---
--- Name: maasserver_virtualmachinedisk_no_bdev_uniq; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX maasserver_virtualmachinedisk_no_bdev_uniq ON public.maasserver_virtualmachinedisk USING btree (vm_id, name) WHERE (block_device_id IS NULL);
-
-
---
--- Name: maasserver_virtualmachinedisk_vm_id_a5308b7c; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_virtualmachinedisk_vm_id_a5308b7c ON public.maasserver_virtualmachinedisk USING btree (vm_id);
-
-
---
--- Name: maasserver_virtualmachineinterface_host_interface_id_9408be99; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_virtualmachineinterface_host_interface_id_9408be99 ON public.maasserver_virtualmachineinterface USING btree (host_interface_id);
-
-
---
--- Name: maasserver_virtualmachineinterface_iface_uniq; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX maasserver_virtualmachineinterface_iface_uniq ON public.maasserver_virtualmachineinterface USING btree (vm_id, mac_address, host_interface_id) WHERE (host_interface_id IS NOT NULL);
-
-
---
--- Name: maasserver_virtualmachineinterface_no_iface_uniq; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX maasserver_virtualmachineinterface_no_iface_uniq ON public.maasserver_virtualmachineinterface USING btree (vm_id, mac_address) WHERE (host_interface_id IS NULL);
-
-
---
--- Name: maasserver_virtualmachineinterface_vm_id_a6acb3e9; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_virtualmachineinterface_vm_id_a6acb3e9 ON public.maasserver_virtualmachineinterface USING btree (vm_id);
-
-
---
 -- Name: maasserver_vlan_fabric_id_af5275c8; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -16524,27 +15040,6 @@ CREATE INDEX maasserver_vlan_secondary_rack_id_3b97d19a ON public.maasserver_vla
 --
 
 CREATE INDEX maasserver_vlan_space_id_5e1dc51f ON public.maasserver_vlan USING btree (space_id);
-
-
---
--- Name: maasserver_vmcluster_name_dbc3c69c_like; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_vmcluster_name_dbc3c69c_like ON public.maasserver_vmcluster USING btree (name text_pattern_ops);
-
-
---
--- Name: maasserver_vmcluster_pool_id_aad02386; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_vmcluster_pool_id_aad02386 ON public.maasserver_vmcluster USING btree (pool_id);
-
-
---
--- Name: maasserver_vmcluster_zone_id_07623572; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX maasserver_vmcluster_zone_id_07623572 ON public.maasserver_vmcluster USING btree (zone_id);
 
 
 --
@@ -17045,27 +15540,6 @@ CREATE TRIGGER bmc_bmc_machine_update_notify AFTER UPDATE ON public.maasserver_b
 
 
 --
--- Name: maasserver_bmc bmc_pod_delete_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER bmc_pod_delete_notify AFTER DELETE ON public.maasserver_bmc FOR EACH ROW EXECUTE FUNCTION public.pod_delete_notify();
-
-
---
--- Name: maasserver_bmc bmc_pod_insert_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER bmc_pod_insert_notify AFTER INSERT ON public.maasserver_bmc FOR EACH ROW EXECUTE FUNCTION public.pod_insert_notify();
-
-
---
--- Name: maasserver_bmc bmc_pod_update_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER bmc_pod_update_notify AFTER UPDATE ON public.maasserver_bmc FOR EACH ROW EXECUTE FUNCTION public.pod_update_notify();
-
-
---
 -- Name: maasserver_cacheset cacheset_nd_cacheset_link_notify; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -17311,13 +15785,6 @@ CREATE TRIGGER filesystemgroup_nd_filesystemgroup_update_notify AFTER UPDATE ON 
 
 
 --
--- Name: maasserver_interface interface_interface_pod_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER interface_interface_pod_notify AFTER INSERT OR DELETE OR UPDATE ON public.maasserver_interface FOR EACH ROW EXECUTE FUNCTION public.interface_pod_notify();
-
-
---
 -- Name: maasserver_interface_ip_addresses interface_ip_addresses_nd_sipaddress_dns_link_notify; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -17472,52 +15939,10 @@ CREATE TRIGGER node_machine_update_notify AFTER UPDATE ON public.maasserver_node
 
 
 --
--- Name: maasserver_node node_node_pod_delete_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_pod_delete_notify AFTER DELETE ON public.maasserver_node FOR EACH ROW EXECUTE FUNCTION public.node_pod_delete_notify();
-
-
---
--- Name: maasserver_node node_node_pod_insert_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_pod_insert_notify AFTER INSERT ON public.maasserver_node FOR EACH ROW EXECUTE FUNCTION public.node_pod_insert_notify();
-
-
---
--- Name: maasserver_node node_node_pod_update_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_pod_update_notify AFTER UPDATE ON public.maasserver_node FOR EACH ROW WHEN ((((new.architecture)::text IS DISTINCT FROM (old.architecture)::text) OR (new.bmc_id IS DISTINCT FROM old.bmc_id) OR (new.cpu_count IS DISTINCT FROM old.cpu_count) OR (new.cpu_speed IS DISTINCT FROM old.cpu_speed) OR (new.current_commissioning_script_set_id IS DISTINCT FROM old.current_commissioning_script_set_id) OR (new.current_installation_script_set_id IS DISTINCT FROM old.current_installation_script_set_id) OR (new.current_testing_script_set_id IS DISTINCT FROM old.current_testing_script_set_id) OR (new.description IS DISTINCT FROM old.description) OR ((new.distro_series)::text IS DISTINCT FROM (old.distro_series)::text) OR (new.domain_id IS DISTINCT FROM old.domain_id) OR ((new.error)::text IS DISTINCT FROM (old.error)::text) OR ((new.hostname)::text IS DISTINCT FROM (old.hostname)::text) OR ((new.hwe_kernel)::text IS DISTINCT FROM (old.hwe_kernel)::text) OR (new.instance_power_parameters IS DISTINCT FROM old.instance_power_parameters) OR (new.last_image_sync IS DISTINCT FROM old.last_image_sync) OR ((new.license_key)::text IS DISTINCT FROM (old.license_key)::text) OR (new.locked IS DISTINCT FROM old.locked) OR ((new.min_hwe_kernel)::text IS DISTINCT FROM (old.min_hwe_kernel)::text) OR ((new.osystem)::text IS DISTINCT FROM (old.osystem)::text) OR (new.owner_id IS DISTINCT FROM old.owner_id) OR (new.parent_id IS DISTINCT FROM old.parent_id) OR (new.pool_id IS DISTINCT FROM old.pool_id) OR ((new.power_state)::text IS DISTINCT FROM (old.power_state)::text) OR (new.status IS DISTINCT FROM old.status) OR (new.swap_size IS DISTINCT FROM old.swap_size) OR (new.zone_id IS DISTINCT FROM old.zone_id))) EXECUTE FUNCTION public.node_pod_update_notify();
-
-
---
 -- Name: maasserver_node node_node_type_change_notify; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER node_node_type_change_notify AFTER UPDATE ON public.maasserver_node FOR EACH ROW WHEN ((new.node_type IS DISTINCT FROM old.node_type)) EXECUTE FUNCTION public.node_type_change_notify();
-
-
---
--- Name: maasserver_node node_node_vmcluster_delete_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_vmcluster_delete_notify AFTER DELETE ON public.maasserver_node FOR EACH ROW EXECUTE FUNCTION public.node_vmcluster_delete_notify();
-
-
---
--- Name: maasserver_node node_node_vmcluster_insert_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_vmcluster_insert_notify AFTER INSERT ON public.maasserver_node FOR EACH ROW EXECUTE FUNCTION public.node_vmcluster_insert_notify();
-
-
---
--- Name: maasserver_node node_node_vmcluster_update_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER node_node_vmcluster_update_notify AFTER UPDATE ON public.maasserver_node FOR EACH ROW EXECUTE FUNCTION public.node_vmcluster_update_notify();
 
 
 --
@@ -18137,27 +16562,6 @@ CREATE TRIGGER vlan_vlan_update_notify AFTER UPDATE ON public.maasserver_vlan FO
 
 
 --
--- Name: maasserver_vmcluster vmcluster_vmcluster_delete_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER vmcluster_vmcluster_delete_notify AFTER DELETE ON public.maasserver_vmcluster FOR EACH ROW EXECUTE FUNCTION public.vmcluster_delete_notify();
-
-
---
--- Name: maasserver_vmcluster vmcluster_vmcluster_insert_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER vmcluster_vmcluster_insert_notify AFTER INSERT ON public.maasserver_vmcluster FOR EACH ROW EXECUTE FUNCTION public.vmcluster_insert_notify();
-
-
---
--- Name: maasserver_vmcluster vmcluster_vmcluster_update_notify; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER vmcluster_vmcluster_update_notify AFTER UPDATE ON public.maasserver_vmcluster FOR EACH ROW EXECUTE FUNCTION public.vmcluster_update_notify();
-
-
---
 -- Name: auth_group_permissions auth_group_permissio_permission_id_84c5c92e_fk_auth_perm; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -18238,35 +16642,11 @@ ALTER TABLE ONLY public.maasserver_blockdevice
 
 
 --
--- Name: maasserver_bmc maasserver_bmc_default_storage_pool_5f48762b_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_bmc
-    ADD CONSTRAINT maasserver_bmc_default_storage_pool_5f48762b_fk_maasserve FOREIGN KEY (default_storage_pool_id) REFERENCES public.maasserver_podstoragepool(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
 -- Name: maasserver_bmc maasserver_bmc_ip_address_id_79362d14_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.maasserver_bmc
     ADD CONSTRAINT maasserver_bmc_ip_address_id_79362d14_fk FOREIGN KEY (ip_address_id) REFERENCES public.maasserver_staticipaddress(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_bmc maasserver_bmc_pool_id_6c449d30_fk_maasserver_resourcepool_id; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_bmc
-    ADD CONSTRAINT maasserver_bmc_pool_id_6c449d30_fk_maasserver_resourcepool_id FOREIGN KEY (pool_id) REFERENCES public.maasserver_resourcepool(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_bmc maasserver_bmc_zone_id_774ea0de_fk_maasserver_zone_id; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_bmc
-    ADD CONSTRAINT maasserver_bmc_zone_id_774ea0de_fk_maasserver_zone_id FOREIGN KEY (zone_id) REFERENCES public.maasserver_zone(id) DEFERRABLE INITIALLY DEFERRED;
 
 
 --
@@ -18291,14 +16671,6 @@ ALTER TABLE ONLY public.maasserver_bmcroutablerackcontrollerrelationship
 
 ALTER TABLE ONLY public.maasserver_bootresourcefilesync
     ADD CONSTRAINT maasserver_bootresou_file_id_22508d9b_fk_maasserve FOREIGN KEY (file_id) REFERENCES public.maasserver_bootresourcefile(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_bootresourcefile maasserver_bootresou_largefile_id_cf035187_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_bootresourcefile
-    ADD CONSTRAINT maasserver_bootresou_largefile_id_cf035187_fk_maasserve FOREIGN KEY (largefile_id) REFERENCES public.maasserver_largefile(id) DEFERRABLE INITIALLY DEFERRED;
 
 
 --
@@ -19022,46 +17394,6 @@ ALTER TABLE ONLY public.maasserver_physicalblockdevice
 
 
 --
--- Name: maasserver_podhints_nodes maasserver_podhints__node_id_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints_nodes
-    ADD CONSTRAINT maasserver_podhints__node_id_fk_maasserve FOREIGN KEY (node_id) REFERENCES public.maasserver_node(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_podhints_nodes maasserver_podhints__podhints_id_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints_nodes
-    ADD CONSTRAINT maasserver_podhints__podhints_id_fk_maasserve FOREIGN KEY (podhints_id) REFERENCES public.maasserver_podhints(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_podhints maasserver_podhints_cluster_id_b526f79f_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints
-    ADD CONSTRAINT maasserver_podhints_cluster_id_b526f79f_fk FOREIGN KEY (cluster_id) REFERENCES public.maasserver_vmcluster(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_podhints maasserver_podhints_pod_id_42c87c40_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podhints
-    ADD CONSTRAINT maasserver_podhints_pod_id_42c87c40_fk FOREIGN KEY (pod_id) REFERENCES public.maasserver_bmc(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_podstoragepool maasserver_podstoragepool_pod_id_11db94aa_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_podstoragepool
-    ADD CONSTRAINT maasserver_podstoragepool_pod_id_11db94aa_fk FOREIGN KEY (pod_id) REFERENCES public.maasserver_bmc(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
 -- Name: maasserver_rdns maasserver_rdns_observer_id_85a64c6b_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -19294,62 +17626,6 @@ ALTER TABLE ONLY public.maasserver_virtualblockdevice
 
 
 --
--- Name: maasserver_virtualmachinedisk maasserver_virtualma_backing_pool_id_2fe2f82c_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk
-    ADD CONSTRAINT maasserver_virtualma_backing_pool_id_2fe2f82c_fk_maasserve FOREIGN KEY (backing_pool_id) REFERENCES public.maasserver_podstoragepool(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachinedisk maasserver_virtualma_vm_id_a5308b7c_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk
-    ADD CONSTRAINT maasserver_virtualma_vm_id_a5308b7c_fk_maasserve FOREIGN KEY (vm_id) REFERENCES public.maasserver_virtualmachine(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachineinterface maasserver_virtualma_vm_id_a6acb3e9_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachineinterface
-    ADD CONSTRAINT maasserver_virtualma_vm_id_a6acb3e9_fk_maasserve FOREIGN KEY (vm_id) REFERENCES public.maasserver_virtualmachine(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachine maasserver_virtualmachine_bmc_id_e2b4f381_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine
-    ADD CONSTRAINT maasserver_virtualmachine_bmc_id_e2b4f381_fk FOREIGN KEY (bmc_id) REFERENCES public.maasserver_bmc(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachineinterface maasserver_virtualmachine_host_interface_id_9408be99_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachineinterface
-    ADD CONSTRAINT maasserver_virtualmachine_host_interface_id_9408be99_fk FOREIGN KEY (host_interface_id) REFERENCES public.maasserver_interface(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachine maasserver_virtualmachine_machine_id_22da40a9_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachine
-    ADD CONSTRAINT maasserver_virtualmachine_machine_id_22da40a9_fk FOREIGN KEY (machine_id) REFERENCES public.maasserver_node(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_virtualmachinedisk maasserver_virtualmachinedisk_block_device_id_8b224e57_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_virtualmachinedisk
-    ADD CONSTRAINT maasserver_virtualmachinedisk_block_device_id_8b224e57_fk FOREIGN KEY (block_device_id) REFERENCES public.maasserver_blockdevice(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
 -- Name: maasserver_vlan maasserver_vlan_fabric_id_af5275c8_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -19387,22 +17663,6 @@ ALTER TABLE ONLY public.maasserver_vlan
 
 ALTER TABLE ONLY public.maasserver_vlan
     ADD CONSTRAINT maasserver_vlan_space_id_5e1dc51f_fk FOREIGN KEY (space_id) REFERENCES public.maasserver_space(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_vmcluster maasserver_vmcluster_pool_id_aad02386_fk_maasserve; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_vmcluster
-    ADD CONSTRAINT maasserver_vmcluster_pool_id_aad02386_fk_maasserve FOREIGN KEY (pool_id) REFERENCES public.maasserver_resourcepool(id) DEFERRABLE INITIALLY DEFERRED;
-
-
---
--- Name: maasserver_vmcluster maasserver_vmcluster_zone_id_07623572_fk_maasserver_zone_id; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.maasserver_vmcluster
-    ADD CONSTRAINT maasserver_vmcluster_zone_id_07623572_fk_maasserver_zone_id FOREIGN KEY (zone_id) REFERENCES public.maasserver_zone(id) DEFERRABLE INITIALLY DEFERRED;
 
 
 --

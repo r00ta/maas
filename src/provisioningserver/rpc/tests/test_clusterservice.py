@@ -1,4 +1,4 @@
-# Copyright 2014-2025 Canonical Ltd.  This software is licensed under the
+# Copyright 2014-2026 Canonical Ltd.  This software is licensed under the
 # GNU Affero General Public License version 3 (see the file LICENSE).
 from hashlib import sha256
 from hmac import HMAC
@@ -40,15 +40,6 @@ from provisioningserver.certificates import (
     get_maas_agent_cert_paths,
     get_maas_cluster_cert_paths,
 )
-from provisioningserver.drivers.pod import (
-    DiscoveredMachine,
-    DiscoveredPod,
-    DiscoveredPodHints,
-    DiscoveredPodProject,
-    RequestedMachine,
-    RequestedMachineBlockDevice,
-    RequestedMachineInterface,
-)
 from provisioningserver.drivers.power import PowerError
 from provisioningserver.drivers.power.registry import PowerDriverRegistry
 from provisioningserver.rpc import (
@@ -57,7 +48,6 @@ from provisioningserver.rpc import (
     common,
     exceptions,
     getRegionClient,
-    pods,
 )
 from provisioningserver.rpc import power as power_module
 from provisioningserver.rpc.clusterservice import (
@@ -1913,119 +1903,6 @@ class TestClusterProtocol_PowerQuery(MAASTestCase):
         )
 
 
-class TestClusterProtocol_SetBootOrder(MAASTestCase):
-    run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
-
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(cluster.SetBootOrder.commandName)
-        self.assertIsNotNone(responder)
-
-    @inlineCallbacks
-    def test_set_boot_order(self):
-        mock_get_item = self.patch(PowerDriverRegistry, "get_item")
-        mock_get_item.return_value.can_set_boot_order = True
-        mock_get_item.return_value.set_boot_order.return_value = succeed(None)
-        system_id = factory.make_name("system_id")
-        context = factory.make_name("context")
-        order = [
-            {
-                "id": random.randint(0, 100),
-                "name": factory.make_name("name"),
-                "mac_address": factory.make_mac_address(),
-                "vendor": factory.make_name("vendor"),
-                "product": factory.make_name("product"),
-                "id_path": factory.make_name("id_path"),
-                "model": factory.make_name("model"),
-                "serial": factory.make_name("serial"),
-            }
-            for _ in range(3)
-        ]
-
-        yield call_responder(
-            Cluster(),
-            cluster.SetBootOrder,
-            {
-                "system_id": system_id,
-                "hostname": factory.make_name("hostname"),
-                "power_type": factory.make_name("power_type"),
-                "context": context,
-                "order": order,
-            },
-        )
-
-        mock_get_item.return_value.set_boot_order.assert_called_once_with(
-            system_id, context, order
-        )
-
-    @inlineCallbacks
-    def test_set_boot_order_unknown_power_typer(self):
-        mock_get_item = self.patch(PowerDriverRegistry, "get_item")
-        mock_get_item.return_value = None
-        system_id = factory.make_name("system_id")
-        context = factory.make_name("context")
-        order = [
-            {
-                "id": random.randint(0, 100),
-                "name": factory.make_name("name"),
-                "mac_address": factory.make_mac_address(),
-                "vendor": factory.make_name("vendor"),
-                "product": factory.make_name("product"),
-                "id_path": factory.make_name("id_path"),
-                "model": factory.make_name("model"),
-                "serial": factory.make_name("serial"),
-            }
-            for _ in range(3)
-        ]
-
-        with TestCase.assertRaises(self, exceptions.UnknownPowerType):
-            yield call_responder(
-                Cluster(),
-                cluster.SetBootOrder,
-                {
-                    "system_id": system_id,
-                    "hostname": factory.make_name("hostname"),
-                    "power_type": factory.make_name("power_type"),
-                    "context": context,
-                    "order": order,
-                },
-            )
-
-    @inlineCallbacks
-    def test_set_boot_order_unsupported(self):
-        mock_get_item = self.patch(PowerDriverRegistry, "get_item")
-        mock_get_item.return_value.can_set_boot_order = False
-        system_id = factory.make_name("system_id")
-        context = factory.make_name("context")
-        order = [
-            {
-                "id": random.randint(0, 100),
-                "name": factory.make_name("name"),
-                "mac_address": factory.make_mac_address(),
-                "vendor": factory.make_name("vendor"),
-                "product": factory.make_name("product"),
-                "id_path": factory.make_name("id_path"),
-                "model": factory.make_name("model"),
-                "serial": factory.make_name("serial"),
-            }
-            for _ in range(3)
-        ]
-
-        yield call_responder(
-            Cluster(),
-            cluster.SetBootOrder,
-            {
-                "system_id": system_id,
-                "hostname": factory.make_name("hostname"),
-                "power_type": factory.make_name("power_type"),
-                "context": context,
-                "order": order,
-            },
-        )
-
-        mock_get_item.return_value.set_boot_order.assert_not_called()
-
-
 class MAASTestCaseThatWaitsForDeferredThreads(MAASTestCase):
     """Capture deferred threads and wait for them during teardown.
 
@@ -2140,22 +2017,6 @@ class TestClusterProtocol_ScanNetworks(
         args = get_scan_all_networks_args(scan_all=True)
         self.assertEqual(
             args, [get_maas_common_command().encode("utf-8"), b"scan-network"]
-        )
-
-    def test_get_scan_all_networks_args_sudo(self):
-        is_dev_environment_mock = self.patch_autospec(
-            clusterservice, "is_dev_environment"
-        )
-        is_dev_environment_mock.return_value = False
-        args = get_scan_all_networks_args(scan_all=True)
-        self.assertEqual(
-            args,
-            [
-                b"sudo",
-                b"-n",
-                get_maas_common_command().encode("utf-8"),
-                b"scan-network",
-            ],
         )
 
     def test_get_scan_all_networks_args_returns_supplied_cidrs(self):
@@ -2944,246 +2805,6 @@ class TestClusterProtocol_AddChassis(MAASTestCase):
         self.assertEqual({}, response.result)
 
 
-class TestClusterProtocol_DiscoverPodProjects(MAASTestCase):
-    run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
-
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(
-            cluster.DiscoverPodProjects.commandName
-        )
-        self.assertIsNotNone(responder)
-
-    def test_calls_discover_pod_projects(self):
-        mock_discover_pod_projects = self.patch_autospec(
-            pods, "discover_pod_projects"
-        )
-        mock_discover_pod_projects.return_value = succeed(
-            {
-                "projects": [
-                    DiscoveredPodProject(
-                        name="p1",
-                        description="Project 1",
-                    ),
-                    DiscoveredPodProject(
-                        name="p2",
-                        description="Project 2",
-                    ),
-                ]
-            }
-        )
-        pod_type = factory.make_name("pod_type")
-        context = {}
-        call_responder(
-            Cluster(),
-            cluster.DiscoverPodProjects,
-            {
-                "type": pod_type,
-                "context": context,
-            },
-        )
-        mock_discover_pod_projects.assert_called_once_with(pod_type, context)
-
-
-class TestClusterProtocol_DiscoverPod(MAASTestCase):
-    run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
-
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(cluster.DiscoverPod.commandName)
-        self.assertIsNotNone(responder)
-
-    def test_calls_discover_pod(self):
-        mock_discover_pod = self.patch_autospec(pods, "discover_pod")
-        mock_discover_pod.return_value = succeed(
-            {
-                "pod": DiscoveredPod(
-                    architectures=["amd64/generic"],
-                    cores=random.randint(1, 8),
-                    cpu_speed=random.randint(1000, 3000),
-                    memory=random.randint(1024, 8192),
-                    local_storage=0,
-                    hints=DiscoveredPodHints(
-                        cores=random.randint(1, 8),
-                        cpu_speed=random.randint(1000, 2000),
-                        memory=random.randint(1024, 8192),
-                        local_storage=0,
-                    ),
-                    machines=[],
-                )
-            }
-        )
-        pod_type = factory.make_name("pod_type")
-        context = {"data": factory.make_name("data")}
-        pod_id = random.randint(1, 100)
-        name = factory.make_name("pod")
-        call_responder(
-            Cluster(),
-            cluster.DiscoverPod,
-            {
-                "type": pod_type,
-                "context": context,
-                "pod_id": pod_id,
-                "name": name,
-            },
-        )
-        mock_discover_pod.assert_called_once_with(
-            pod_type, context, pod_id=pod_id, name=name
-        )
-
-
-class TestClusterProtocol_SendPodCommissioningResults(MAASTestCase):
-    run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
-
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(
-            cluster.SendPodCommissioningResults.commandName
-        )
-        self.assertIsNotNone(responder)
-
-    @inlineCallbacks
-    def test_calls_send_pod_commissioning_results(self):
-        mock_send_pod_commissioning_results = self.patch(
-            pods, "send_pod_commissioning_results"
-        )
-        mock_send_pod_commissioning_results.return_value = succeed({})
-        pod_type = factory.make_name("pod_type")
-        context = {"data": factory.make_name("data")}
-        pod_id = random.randint(1, 100)
-        name = factory.make_name("pod")
-        system_id = factory.make_name("system_id")
-        consumer_key = factory.make_name("consumer_key")
-        token_key = factory.make_name("token_key")
-        token_secret = factory.make_name("token_secret")
-        metadata_url = urlparse(factory.make_url())
-        yield call_responder(
-            Cluster(),
-            cluster.SendPodCommissioningResults,
-            {
-                "type": pod_type,
-                "context": context,
-                "pod_id": pod_id,
-                "name": name,
-                "system_id": system_id,
-                "consumer_key": consumer_key,
-                "token_key": token_key,
-                "token_secret": token_secret,
-                "metadata_url": metadata_url,
-            },
-        )
-        mock_send_pod_commissioning_results.assert_called_once_with(
-            pod_type,
-            context,
-            pod_id,
-            name,
-            system_id,
-            consumer_key,
-            token_key,
-            token_secret,
-            metadata_url,
-        )
-
-
-class TestClusterProtocol_ComposeMachine(MAASTestCase):
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(
-            cluster.ComposeMachine.commandName
-        )
-        self.assertIsNotNone(responder)
-
-    def test_calls_compose_machine(self):
-        mock_compose_machine = self.patch_autospec(pods, "compose_machine")
-        mock_compose_machine.return_value = succeed(
-            {
-                "machine": DiscoveredMachine(
-                    hostname=factory.make_name("hostname"),
-                    architecture="amd64/generic",
-                    cores=random.randint(1, 8),
-                    cpu_speed=random.randint(1000, 3000),
-                    memory=random.randint(1024, 8192),
-                    block_devices=[],
-                    interfaces=[],
-                ),
-                "hints": DiscoveredPodHints(
-                    cores=random.randint(1, 8),
-                    cpu_speed=random.randint(1000, 2000),
-                    memory=random.randint(1024, 8192),
-                    local_storage=0,
-                ),
-            }
-        )
-        pod_type = factory.make_name("pod_type")
-        context = {"data": factory.make_name("data")}
-        request = RequestedMachine(
-            hostname=factory.make_name("hostname"),
-            architecture="amd64/generic",
-            cores=random.randint(1, 8),
-            cpu_speed=random.randint(1000, 3000),
-            memory=random.randint(1024, 8192),
-            block_devices=[
-                RequestedMachineBlockDevice(size=random.randint(8, 16))
-            ],
-            interfaces=[RequestedMachineInterface()],
-        )
-        pod_id = random.randint(1, 100)
-        name = factory.make_name("pod")
-        call_responder(
-            Cluster(),
-            cluster.ComposeMachine,
-            {
-                "type": pod_type,
-                "context": context,
-                "request": request,
-                "pod_id": pod_id,
-                "name": name,
-            },
-        )
-        mock_compose_machine.assert_called_once_with(
-            pod_type, context, request, pod_id=pod_id, name=name
-        )
-
-
-class TestClusterProtocol_DecomposeMachine(MAASTestCase):
-    run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
-
-    def test_is_registered(self):
-        protocol = Cluster()
-        responder = protocol.locateResponder(
-            cluster.DecomposeMachine.commandName
-        )
-        self.assertIsNotNone(responder)
-
-    @inlineCallbacks
-    def test_calls_decompose_machine(self):
-        mock_decompose_machine = self.patch_autospec(pods, "decompose_machine")
-        mock_decompose_machine.return_value = succeed(
-            {
-                "hints": DiscoveredPodHints(
-                    cores=1, cpu_speed=2, memory=3, local_storage=4
-                )
-            }
-        )
-        pod_type = factory.make_name("pod_type")
-        context = {"data": factory.make_name("data")}
-        pod_id = random.randint(1, 100)
-        name = factory.make_name("pod")
-        yield call_responder(
-            Cluster(),
-            cluster.DecomposeMachine,
-            {
-                "type": pod_type,
-                "context": context,
-                "pod_id": pod_id,
-                "name": name,
-            },
-        )
-        mock_decompose_machine.assert_called_once_with(
-            pod_type, context, pod_id=pod_id, name=name
-        )
-
-
 class TestClusterProtocol_DisableAndShutoffRackd(MAASTestCase):
     run_tests_with = MAASTwistedRunTest.make_factory(timeout=TIMEOUT)
 
@@ -3195,16 +2816,6 @@ class TestClusterProtocol_DisableAndShutoffRackd(MAASTestCase):
             cluster.DisableAndShutoffRackd.commandName
         )
         self.assertIsNotNone(responder)
-
-    def test_issues_restart_systemd(self):
-        mock_call_and_check = self.patch(clusterservice, "call_and_check")
-        response = call_responder(
-            Cluster(), cluster.DisableAndShutoffRackd, {}
-        )
-        self.assertEqual({}, response.result)
-        mock_call_and_check.assert_called_once_with(
-            ["sudo", "systemctl", "restart", "maas-rackd"]
-        )
 
     def test_remove_shared_secret(self):
         root_path = Path(self.useFixture(TempDir()).path)
@@ -3221,7 +2832,6 @@ class TestClusterProtocol_DisableAndShutoffRackd(MAASTestCase):
         self.assertFalse(shared_secret_path.exists())
 
     def test_issues_restart_snap(self):
-        self.patch(clusterservice, "running_in_snap").return_value = True
         mock_call_and_check = self.patch(clusterservice, "call_and_check")
         response = call_responder(
             Cluster(), cluster.DisableAndShutoffRackd, {}
@@ -3230,15 +2840,6 @@ class TestClusterProtocol_DisableAndShutoffRackd(MAASTestCase):
         mock_call_and_check.assert_called_once_with(
             ["snapctl", "restart", "maas.pebble"]
         )
-
-    @inlineCallbacks
-    def test_raises_error_on_failure_systemd(self):
-        mock_call_and_check = self.patch(clusterservice, "call_and_check")
-        mock_call_and_check.side_effect = ExternalProcessError(
-            1, "systemctl", "failure"
-        )
-        with self.assertRaises(exceptions.CannotDisableAndShutoffRackd):
-            yield call_responder(Cluster(), cluster.DisableAndShutoffRackd, {})
 
     @inlineCallbacks
     def test_raises_error_on_failure_snap(self):
@@ -3250,7 +2851,6 @@ class TestClusterProtocol_DisableAndShutoffRackd(MAASTestCase):
             yield call_responder(Cluster(), cluster.DisableAndShutoffRackd, {})
 
     def test_snap_ignores_signal_error_code_on_restart(self):
-        self.patch(clusterservice, "running_in_snap").return_value = True
         mock_call_and_check = self.patch(clusterservice, "call_and_check")
         mock_call_and_check.side_effect = ExternalProcessError(
             -15, "maas", "failure"

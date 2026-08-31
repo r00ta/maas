@@ -22,6 +22,8 @@ class SwitchResponse(HalResponse[BaseHal]):
 
     kind: str = Field(default="Switch")
     id: int
+    name: str | None = None
+    management_mac: str | None = None
     target_image_id: int | None = None
     target_image: str | None = None
 
@@ -42,6 +44,8 @@ class SwitchResponse(HalResponse[BaseHal]):
         """
         return cls(
             id=switch.id,
+            name=switch.name,
+            management_mac=switch.management_mac,
             target_image_id=switch.target_image_id,
             target_image=switch.target_image,
             hal_links=BaseHal(  # pyright: ignore [reportCallIssue]
@@ -56,6 +60,7 @@ class SwitchResponse(HalResponse[BaseHal]):
         cls,
         switch: Switch,
         target_image: str | None,
+        management_mac: str | None,
         self_base_hyperlink: str,
     ) -> Self:
         """Convert a Switch model to a response object.
@@ -63,6 +68,7 @@ class SwitchResponse(HalResponse[BaseHal]):
         Args:
             switch: The Switch model to convert.
             target_image: The image name assigned to this switch.
+            management_mac: MAC address of the switch management interface.
             self_base_hyperlink: Base URL for HAL self link.
 
         Returns:
@@ -70,6 +76,8 @@ class SwitchResponse(HalResponse[BaseHal]):
         """
         return cls(
             id=switch.id,
+            name=switch.name,
+            management_mac=management_mac,
             target_image_id=switch.target_image_id,
             target_image=target_image,
             hal_links=BaseHal(  # pyright: ignore [reportCallIssue]

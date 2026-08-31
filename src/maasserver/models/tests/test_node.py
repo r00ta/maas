@@ -17,7 +17,6 @@ from crochet import TimeoutError
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models.deletion import Collector
-from django.db.models.query import QuerySet
 from django.utils import timezone
 from fixtures import LoggerFixture
 from netaddr import IPAddress, IPNetwork
@@ -53,7 +52,6 @@ from maasserver.enum import (
     NODE_STATUS_CHOICES,
     NODE_STATUS_CHOICES_DICT,
     NODE_TYPE,
-    NODE_TYPE_CHOICES,
     PARTITION_TABLE_TYPE,
     SERVICE_STATUS,
 )
@@ -68,7 +66,6 @@ from maasserver.models import (
     Bcache,
     BMC,
     BMCRoutableRackControllerRelationship,
-    BridgeInterface,
     Config,
     Controller,
     Device,
@@ -167,7 +164,6 @@ from metadataserver.enum import (
     SCRIPT_STATUS_RUNNING_OR_PENDING,
     SCRIPT_TYPE,
 )
-from provisioningserver.drivers.pod import Capabilities, DiscoveredPodHints
 from provisioningserver.drivers.power.ipmi import IPMI_BOOT_TYPE
 from provisioningserver.drivers.power.registry import PowerDriverRegistry
 from provisioningserver.enum import POWER_STATE
@@ -176,15 +172,10 @@ from provisioningserver.refresh.node_info_scripts import (
     COMMISSIONING_OUTPUT_NAME,
     NODE_INFO_SCRIPTS,
 )
-from provisioningserver.rpc.cluster import (
-    AddChassis,
-    DecomposeMachine,
-    DisableAndShutoffRackd,
-)
+from provisioningserver.rpc.cluster import AddChassis, DisableAndShutoffRackd
 from provisioningserver.rpc.exceptions import (
     CannotDisableAndShutoffRackd,
     NoConnectionsAvailable,
-    PodActionFail,
     PowerActionFail,
     UnknownPowerType,
 )
@@ -1620,14 +1611,6 @@ class TestNode(MAASServerTestCase):
             nodes[1].delete()
             self.assertIsNone(reload_object(bmc))
 
-    def test_delete_node_doesnt_delete_pod(self):
-        node = factory.make_Node()
-        pod = factory.make_Pod()
-        node.bmc = pod
-        node.save()
-        node.delete()
-        self.assertIsNotNone(reload_object(pod))
-
     def test_delete_node_deletes_related_interface(self):
         node = factory.make_Node()
         interface = node.add_physical_interface("AA:BB:CC:DD:EE:FF")
@@ -1979,30 +1962,6 @@ class TestNode(MAASServerTestCase):
             [obj.serialize() for obj in interfaces + block_devices],
             node._get_boot_order(),
         )
-
-    def test_set_boot_order(self):
-        node = factory.make_Node(interface=True, power_type="hmcz")
-        mock_power_control_node = self.patch(node, "_power_control_node")
-        mock_power_control_node.return_value = defer.succeed(None)
-        network_boot = factory.pick_bool()
-
-        node.set_boot_order(network_boot)
-
-        mock_power_control_node.assert_called_with(
-            ANY,
-            None,
-            node.get_effective_power_info(),
-            node._get_boot_order(network_boot),
-        )
-        self.assertTrue(mock_power_control_node.return_value.called)
-
-    def test_set_boot_order_does_nothing_if_unsupported(self):
-        node = factory.make_Node(interface=True, power_type="manual")
-        mock_power_control_node = self.patch(node, "_power_control_node")
-
-        node.set_boot_order(factory.pick_bool())
-
-        mock_power_control_node.assert_not_called()
 
     def test_get_effective_kernel_options_with_nothing_set(self):
         node = factory.make_Node()
@@ -2706,7 +2665,6 @@ class TestNode(MAASServerTestCase):
         self.assertEqual(node.osystem, "")
         self.assertEqual(node.distro_series, "")
         self.assertEqual(node.license_key, "")
-        self.assertFalse(node.install_rackd)
 
         expected_power_info = node.get_effective_power_info()
         node._power_control_node.assert_called_once_with(
@@ -2749,7 +2707,6 @@ class TestNode(MAASServerTestCase):
         self.assertEqual(node.osystem, "")
         self.assertEqual(node.distro_series, "")
         self.assertEqual(node.license_key, "")
-        self.assertFalse(node.install_rackd)
         mock_stop.assert_called_once_with(node.owner)
         mock_finalize_release.assert_called_once_with()
 
@@ -2781,7 +2738,6 @@ class TestNode(MAASServerTestCase):
         self.assertEqual(node.osystem, "")
         self.assertEqual(node.distro_series, "")
         self.assertEqual(node.license_key, "")
-        self.assertFalse(node.install_rackd)
         self.assertFalse(OwnerData.objects.filter(node=node).exists())
 
     def test_release_to_new_if_no_commissioning_data(self):
@@ -3058,17 +3014,6 @@ class TestNode(MAASServerTestCase):
         with post_commit_hooks:
             node.release()
         self.assertTrue(node.netboot)
-
-    def test_release_sets_install_rackd_false(self):
-        node = factory.make_Node(
-            status=NODE_STATUS.DEPLOYED, owner=factory.make_User()
-        )
-        self.patch(node, "_stop")
-        self.patch(node, "_set_status")
-        node.install_rackd = True
-        with post_commit_hooks:
-            node.release()
-        self.assertFalse(node.install_rackd)
 
     def test_release_logs_user_request_and_creates_sts_msg(self):
         owner = factory.make_User()
@@ -6593,15 +6538,6 @@ class TestNodePowerParameters(MAASServerTestCase):
             machine.save()
         self.assertIsNone(reload_object(bmc))
 
-    def test_orphaned_pods_are_removed(self):
-        pod = factory.make_Pod()
-        machine = factory.make_Node(bmc=factory.make_BMC())
-
-        with post_commit_hooks:
-            machine.bmc = None
-            machine.save()
-        self.assertIsNotNone(reload_object(pod))
-
     def test_is_sync_healthy_returns_false_when_enable_hw_sync_is_false(self):
         node = factory.make_Node()
         self.assertFalse(node.is_sync_healthy)
@@ -6899,166 +6835,6 @@ class TestPowerControlNode(MAASTransactionServerTestCase):
             self.assertEqual(str(e), "error")
         else:
             raise AssertionError("No exception was raised")
-
-
-class TestDecomposeMachineMixin:
-    """Mixin to help `TestDecomposeMachine` and
-    `TestDecomposeMachineTransactional`."""
-
-    def make_composable_pod(self):
-        return factory.make_Pod(capabilities=[Capabilities.COMPOSABLE])
-
-    def fake_rpc_client(self):
-        client = Mock()
-        client.return_value = defer.succeed({})
-        self.patch(
-            node_module, "getClientFromIdentifiers"
-        ).return_value = defer.succeed(client)
-        return client
-
-
-class TestDecomposeMachine(MAASServerTestCase, TestDecomposeMachineMixin):
-    """Test that a machine in a composable pod is decomposed."""
-
-    def test_does_nothing_unless_machine(self):
-        pod = self.make_composable_pod()
-        client = self.fake_rpc_client()
-        for node_type, _ in NODE_TYPE_CHOICES:
-            if node_type != NODE_TYPE.MACHINE:
-                node = factory.make_Node(node_type=node_type)
-                node.bmc = pod
-                node.save()
-                node.delete()
-        client.assert_not_called()
-
-    def test_does_nothing_if_machine_without_bmc(self):
-        client = self.fake_rpc_client()
-        machine = factory.make_Node()
-        machine.bmc = None
-        machine.save()
-        machine.delete()
-        client.assert_not_called()
-
-    def test_does_nothing_if_standard_bmc(self):
-        client = self.fake_rpc_client()
-        machine = factory.make_Node()
-        machine.bmc = factory.make_BMC()
-        machine.save()
-        machine.delete()
-        client.assert_not_called()
-
-    def test_does_nothing_if_none_composable_pod(self):
-        client = self.fake_rpc_client()
-        machine = factory.make_Node()
-        machine.bmc = factory.make_Pod()
-        machine.save()
-        machine.delete()
-        client.assert_not_called()
-
-
-class TestDecomposeMachineTransactional(
-    MAASTransactionServerTestCase, TestDecomposeMachineMixin
-):
-    """Test that a machine in a composable pod is decomposed."""
-
-    @transactional
-    def create_pod_machine_and_hints(self, **kwargs):
-        hints = DiscoveredPodHints(
-            cores=random.randint(1, 8),
-            cpu_speed=random.randint(1000, 2000),
-            memory=random.randint(1024, 8192),
-            local_storage=0,
-        )
-        pod = self.make_composable_pod()
-        client = self.fake_rpc_client()
-        client.return_value = defer.succeed({"hints": hints})
-        machine = factory.make_Node(**kwargs)
-        machine.bmc = pod
-        machine.set_instance_power_parameters(
-            {"power_id": factory.make_name("power_id")}
-        )
-        return pod, machine, hints, client
-
-    def test_delete_deletes_virtual_machine(self):
-        pod, machine, hints, client = self.create_pod_machine_and_hints()
-        vm = factory.make_VirtualMachine(bmc=pod, machine=machine)
-        with post_commit_hooks:
-            machine.delete()
-        self.assertIsNone(reload_object(vm))
-        client.assert_called_once()
-
-    def test_performs_decompose_machine(self):
-        pod, machine, hints, client = self.create_pod_machine_and_hints(
-            interface=True
-        )
-        interface = transactional(machine.current_config.interface_set.first)()
-        with post_commit_hooks:
-            machine.delete()
-        client.assert_called_once_with(
-            DecomposeMachine,
-            type=pod.power_type,
-            context=machine.get_power_parameters(),
-            pod_id=pod.id,
-            name=pod.name,
-        )
-        pod = transactional(reload_object)(pod)
-        self.assertEqual(pod.hints.cores, hints.cores)
-        self.assertEqual(pod.hints.memory, hints.memory)
-        self.assertEqual(pod.hints.local_storage, hints.local_storage)
-        machine = transactional(reload_object)(machine)
-        self.assertIsNone(machine)
-        interface = transactional(reload_object)(interface)
-        self.assertIsNone(interface)
-
-    def test_delete_doesnt_fail_removal(self):
-        mock_log_warning = self.patch(node_module.maaslog, "warning")
-        pod, machine, hints, client = self.create_pod_machine_and_hints()
-        client.return_value = defer.fail(PodActionFail("bang!"))
-        with post_commit_hooks:
-            machine.delete()
-        mock_log_warning.assert_called_with(
-            f"{machine.hostname}: Failure decomposing machine: "
-            "Unable to decompose machine because: bang!"
-        )
-        # the machine is still deleted
-        self.assertIsNone(transactional(reload_object)(machine))
-
-    def test_release_deletes_dynamic_machine(self):
-        owner = transactional(factory.make_User)()
-        pod, machine, hints, client = self.create_pod_machine_and_hints(
-            status=NODE_STATUS.ALLOCATED,
-            owner=owner,
-            dynamic=True,
-            power_state=POWER_STATE.OFF,
-            interface=True,
-        )
-        interface = transactional(machine.current_config.interface_set.first)()
-        with post_commit_hooks:
-            machine.release()
-        client.assert_called_once_with(
-            DecomposeMachine,
-            type=pod.power_type,
-            context=machine.get_power_parameters(),
-            pod_id=pod.id,
-            name=pod.name,
-        )
-        pod = transactional(reload_object)(pod)
-        self.assertEqual(pod.hints.cores, hints.cores)
-        self.assertEqual(pod.hints.memory, hints.memory)
-        self.assertEqual(pod.hints.local_storage, hints.local_storage)
-        machine = transactional(reload_object)(machine)
-        self.assertIsNone(machine)
-        interface = transactional(reload_object)(interface)
-        self.assertIsNone(interface)
-
-    def test_delete_virtual_machine_for_machine(self):
-        pod, machine, hints, client = self.create_pod_machine_and_hints()
-        vm = transactional(factory.make_VirtualMachine)(
-            bmc=pod, machine=machine
-        )
-        with post_commit_hooks:
-            machine.delete()
-        self.assertIsNone(transactional(reload_object)(vm))
 
 
 class TestNodeTransitions(MAASServerTestCase):
@@ -8258,6 +8034,50 @@ class TestNodeNetworking(MAASTransactionServerTestCase):
         )
         self.assertEqual(expected_gateways, node.get_default_gateways())
 
+    def test_get_default_gateways_ignores_unconfigured_gateway_link(self):
+        # LP#2162993. An interface set as the default
+        # gateway that is later changed to "Unconfigured" (LINK_UP) should not
+        # be used as the default gateway
+        node = factory.make_Node()
+        nic0 = factory.make_Interface(INTERFACE_TYPE.PHYSICAL, node=node)
+        nic1 = factory.make_Interface(INTERFACE_TYPE.PHYSICAL, node=node)
+        subnet_a = factory.make_Subnet(
+            cidr="192.168.0.0/24", gateway_ip="192.168.0.1"
+        )
+        subnet_b = factory.make_Subnet(
+            cidr="192.168.1.0/24", gateway_ip="192.168.1.1"
+        )
+        gateway_link = factory.make_StaticIPAddress(
+            alloc_type=IPADDRESS_TYPE.STICKY,
+            interface=nic0,
+            subnet=subnet_a,
+        )
+        factory.make_StaticIPAddress(
+            alloc_type=IPADDRESS_TYPE.STICKY,
+            interface=nic1,
+            subnet=subnet_b,
+        )
+        node.gateway_link_ipv4 = gateway_link
+        node.save()
+
+        # Simulate setting nic0 to "Unconfigured": the same row is reused
+        # with no IP, which turns it into a LINK_UP link.
+        gateway_link.ip = None
+        with post_commit_hooks:
+            gateway_link.save()
+
+        node = reload_object(node)
+        nic1_gw = GatewayDefinition(
+            interface_id=nic1.id,
+            subnet_id=subnet_b.id,
+            gateway_ip=subnet_b.gateway_ip,
+        )
+        gateways = node.get_default_gateways()
+        self.assertEqual(nic1_gw, gateways.ipv4)
+        self.assertNotIn(
+            nic0.id, [gateway.interface_id for gateway in gateways.all]
+        )
+
     def test_set_initial_net_config_does_nothing_if_skip_networking(self):
         node = factory.make_Node_with_Interface_on_Subnet(skip_networking=True)
         boot_interface = node.get_boot_interface()
@@ -9412,8 +9232,6 @@ class TestNode_Start(MAASTransactionServerTestCase):
         power_state=POWER_STATE.OFF,
         network=None,
         with_boot_disk=True,
-        install_kvm=False,
-        register_vmhost=False,
         ephemeral_deploy=False,
         architecture="i386/generic",
     ):
@@ -9441,8 +9259,6 @@ class TestNode_Start(MAASTransactionServerTestCase):
             cidr=cidr,
             osystem=osystem,
             distro_series=distro_series,
-            install_kvm=install_kvm,
-            register_vmhost=register_vmhost,
             ephemeral_deploy=ephemeral_deploy,
             architecture=architecture,
         )
@@ -9486,30 +9302,6 @@ class TestNode_Start(MAASTransactionServerTestCase):
             power_type="manual",
         )
         node.acquire(admin)
-        self.assertRaises(ValidationError, node.start, admin)
-
-    def test_raises_ValidationError_if_ephemeral_deploy_and_install_kvm(self):
-        admin = factory.make_admin()
-        node = self.make_acquired_node_with_interface(
-            admin,
-            power_type="manual",
-            with_boot_disk=False,
-            ephemeral_deploy=True,
-            install_kvm=True,
-        )
-        self.assertRaises(ValidationError, node.start, admin)
-
-    def test_raises_ValidationError_if_ephemeral_deploy_and_register_vmhost(
-        self,
-    ):
-        admin = factory.make_admin()
-        node = self.make_acquired_node_with_interface(
-            admin,
-            power_type="manual",
-            with_boot_disk=False,
-            ephemeral_deploy=True,
-            register_vmhost=True,
-        )
         self.assertRaises(ValidationError, node.start, admin)
 
     def test_raises_ValidationError_if_ephemeral_deployment_not_supported(
@@ -9762,56 +9554,6 @@ class TestNode_Start(MAASTransactionServerTestCase):
         )
         node.start(user)
         self.assertEqual(NODE_STATUS.DEPLOYING, node.status)
-
-    def test_creates_acquired_bridges_for_install_kvm(self):
-        user = factory.make_User()
-        node = self.make_acquired_node_with_interface(
-            user, power_type="manual"
-        )
-        bridge_type = factory.pick_choice(BRIDGE_TYPE_CHOICES)
-        bridge_stp = factory.pick_bool()
-        bridge_fd = random.randint(0, 500)
-        node.start(
-            user,
-            install_kvm=True,
-            bridge_type=bridge_type,
-            bridge_stp=bridge_stp,
-            bridge_fd=bridge_fd,
-        )
-        node = reload_object(node)
-        bridge = BridgeInterface.objects.get(node_config=node.current_config)
-        interface = node.current_config.interface_set.first()
-        self.assertEqual(NODE_STATUS.DEPLOYING, node.status)
-        self.assertEqual(bridge.mac_address, interface.mac_address)
-        self.assertEqual(bridge.params["bridge_type"], bridge_type)
-        self.assertEqual(bridge.params["bridge_stp"], bridge_stp)
-        self.assertEqual(bridge.params["bridge_fd"], bridge_fd)
-        self.assertTrue(node.install_kvm)
-
-    def test_creates_acquired_bridges_for_register_vmhost(self):
-        user = factory.make_User()
-        node = self.make_acquired_node_with_interface(
-            user, power_type="manual"
-        )
-        bridge_type = factory.pick_choice(BRIDGE_TYPE_CHOICES)
-        bridge_stp = factory.pick_bool()
-        bridge_fd = random.randint(0, 500)
-        node.start(
-            user,
-            register_vmhost=True,
-            bridge_type=bridge_type,
-            bridge_stp=bridge_stp,
-            bridge_fd=bridge_fd,
-        )
-        node = reload_object(node)
-        bridge = BridgeInterface.objects.get(node_config=node.current_config)
-        interface = node.current_config.interface_set.first()
-        self.assertEqual(NODE_STATUS.DEPLOYING, node.status)
-        self.assertEqual(bridge.mac_address, interface.mac_address)
-        self.assertEqual(bridge.params["bridge_type"], bridge_type)
-        self.assertEqual(bridge.params["bridge_stp"], bridge_stp)
-        self.assertEqual(bridge.params["bridge_fd"], bridge_fd)
-        self.assertTrue(node.register_vmhost)
 
     def test_doesnt_change_broken(self):
         user = factory.make_User()
@@ -11219,8 +10961,10 @@ class TestNode_PostCommit_PowerControl(MAASTransactionServerTestCase):
         )
         mock_confirm_power_driver.return_value = defer.succeed(None)
 
-        mock_set_boot_order = self.patch(node_module, "set_boot_order")
-        mock_set_boot_order.return_value = defer.succeed(client)
+        mock_convert = self.patch(
+            node_module, "convert_power_action_to_power_workflow"
+        )
+        mock_convert.return_value = ("power-on", Mock())
 
         # Testing only allows one thread at a time, but the way we are testing
         # this would actually require multiple to be started at once. To
@@ -11233,9 +10977,7 @@ class TestNode_PostCommit_PowerControl(MAASTransactionServerTestCase):
             "state": "on",
         }
 
-        yield node._power_control_node(
-            d, "power_query", power_info, boot_order
-        )
+        yield node._power_control_node(d, "power_on", power_info, boot_order)
 
         mock_getClientFromIdentifiers.assert_called_with(
             [rack_controller.system_id]
@@ -11243,58 +10985,8 @@ class TestNode_PostCommit_PowerControl(MAASTransactionServerTestCase):
         mock_confirm_power_driver.assert_called_with(
             client, power_info.power_type, client.ident
         )
-        mock_set_boot_order.assert_called_with(
-            client, node.system_id, node.hostname, power_info, boot_order
-        )
-
-    @wait_for_reactor
-    @defer.inlineCallbacks
-    def test_sets_boot_order_if_given_with_no_power_method(self):
-        d = self.patch_post_commit()
-        rack_controller = yield deferToDatabase(self.make_rack_controller)
-        node, power_info = yield deferToDatabase(
-            self.make_node,
-            layer2_rack=rack_controller,
-        )
-        boot_order = yield deferToDatabase(node._get_boot_order)
-
-        client = Mock()
-        client.ident = rack_controller.system_id
-        mock_getClientFromIdentifiers = self.patch(
-            node_module, "getClientFromIdentifiers"
-        )
-        mock_getClientFromIdentifiers.return_value = defer.succeed(client)
-
-        # Add the client to getAllClients in so that its considered a to be a
-        # valid connection.
-        self.patch(node_module, "getAllClients").return_value = [client]
-
-        # Mock the confirm power driver check, we check in the test to make
-        # sure it gets called.
-        mock_confirm_power_driver = self.patch(
-            Node, "confirm_power_driver_operable"
-        )
-        mock_confirm_power_driver.return_value = defer.succeed(None)
-
-        mock_set_boot_order = self.patch(node_module, "set_boot_order")
-        mock_set_boot_order.return_value = defer.succeed(client)
-
-        # Testing only allows one thread at a time, but the way we are testing
-        # this would actually require multiple to be started at once. To
-        # by-pass this issue we mock `is_accessible` on the BMC model to return
-        # the value we are expecting.
-        self.patch(node.bmc, "is_accessible").return_value = True
-
-        yield node._power_control_node(d, None, power_info, boot_order)
-
-        mock_getClientFromIdentifiers.assert_called_with(
-            [rack_controller.system_id]
-        )
-        mock_confirm_power_driver.assert_called_with(
-            client, power_info.power_type, client.ident
-        )
-        mock_set_boot_order.assert_called_with(
-            client, node.system_id, node.hostname, power_info, boot_order
+        mock_convert.assert_called_once_with(
+            "power-on", node, power_info, node.is_dpu, boot_order
         )
 
 
@@ -11941,27 +11633,6 @@ class TestControllerGetDiscoveryState(MAASServerTestCase):
         self.assertIn("eth1", monitoring_state)
         self.assertIn("eth2", monitoring_state)
         self.assertEqual(eth1.get_discovery_state(), monitoring_state["eth1"])
-
-
-class TestNodeGetHostedPods(MAASServerTestCase):
-    def test_returns_queryset(self):
-        node = factory.make_Node()
-        pods = node.get_hosted_pods()
-        self.assertIsInstance(pods, QuerySet)
-
-    def test_returns_related_pods_by_ip(self):
-        node = factory.make_Node_with_Interface_on_Subnet()
-        ip = factory.make_StaticIPAddress(interface=node.boot_interface)
-        pod = factory.make_Pod(ip_address=ip)
-        pods = node.get_hosted_pods()
-        self.assertIn(pod, pods)
-
-    def test_returns_related_pods_by_association(self):
-        pod = factory.make_Pod()
-        node = factory.make_Node()
-        pod.hints.nodes.add(node)
-        pods = node.get_hosted_pods()
-        self.assertIn(pod, pods)
 
 
 class TestNodeStorageClone__MappingBetweenNodes(MAASServerTestCase):

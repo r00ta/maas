@@ -16,6 +16,7 @@ class Switch(MaasTimestampedBaseModel):
     A switch is a network device provisioned by MAAS.
     """
 
+    name: str | None = None
     target_image_id: int | None = None
 
 
@@ -23,13 +24,21 @@ class SwitchWithTargetImage(Switch):
     """Model representing a network switch, with it's target image name."""
 
     target_image: str | None = None
+    management_mac: str | None = None
 
     @classmethod
-    def from_switch(cls, switch: Switch, target_image: str | None) -> Self:
+    def from_switch(
+        cls,
+        switch: Switch,
+        target_image: str | None,
+        management_mac: str | None = None,
+    ) -> Self:
         return cls(
             id=switch.id,
+            name=switch.name,
             target_image_id=switch.target_image_id,
             created=switch.created,
             updated=switch.updated,
             target_image=target_image,
+            management_mac=management_mac,
         )

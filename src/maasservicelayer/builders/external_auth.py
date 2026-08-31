@@ -2,6 +2,7 @@
 # GNU Affero General Public License version 3 (see the file LICENSE).
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import Field
 
@@ -9,6 +10,7 @@ from maasservicelayer.models.base import ResourceBuilder, UNSET, Unset
 from maasservicelayer.models.external_auth import (
     AccessTokenType,
     ProviderMetadata,
+    ProviderVendorType,
 )
 
 
@@ -21,6 +23,7 @@ class OAuthProviderBuilder(ResourceBuilder):
 
     client_id: str | Unset = Field(default=UNSET)
     client_secret: str | Unset = Field(default=UNSET)
+    config: dict[str, Any] | None | Unset = Field(default=UNSET)
     created: datetime | Unset = Field(default=UNSET)
     enabled: bool | Unset = Field(default=UNSET)
     issuer_url: str | Unset = Field(default=UNSET)
@@ -30,3 +33,4 @@ class OAuthProviderBuilder(ResourceBuilder):
     scopes: str | Unset = Field(default=UNSET)
     token_type: AccessTokenType | Unset = Field(default=UNSET)
     updated: datetime | Unset = Field(default=UNSET)
+    vendor: ProviderVendorType | Unset = Field(default=UNSET)

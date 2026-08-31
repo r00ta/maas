@@ -610,13 +610,29 @@ class TestDownloadBootresourcefileActivity:
         )
 
     @pytest.mark.parametrize(
-        "exception",
+        "exception,non_retryable",
         [
-            IOError(),
-            httpx.HTTPError("Error"),
-            LocalStoreInvalidHash(),
-            LocalStoreAllocationFail(),
-            LocalStoreFileSizeMismatch(),
+            (IOError(), False),
+            (
+                httpx.HTTPStatusError(
+                    "404",
+                    request=Mock(httpx.Request),
+                    response=httpx.Response(404),
+                ),
+                True,
+            ),
+            (
+                httpx.HTTPStatusError(
+                    "500",
+                    request=Mock(httpx.Request),
+                    response=httpx.Response(500),
+                ),
+                True,
+            ),
+            (httpx.HTTPError("Error"), False),
+            (LocalStoreInvalidHash(), False),
+            (LocalStoreAllocationFail(), True),
+            (LocalStoreFileSizeMismatch(), False),
         ],
     )
     async def test_download_file_raise_other_exception(
@@ -626,6 +642,7 @@ class TestDownloadBootresourcefileActivity:
         mock_apiclient: Mock,
         activity_env: ActivityEnvironment,
         exception,
+        non_retryable: bool,
     ) -> None:
         mock_local_file.valid.return_value = False
         # `store` is not the responsible of raising all these exceptions,
@@ -643,10 +660,11 @@ class TestDownloadBootresourcefileActivity:
             filename_on_disk="0" * 7,
             total_size=100,
         )
-        with pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError) as ex:
             await activity_env.run(
                 boot_activities.download_bootresourcefile, param
             )
+        assert ex.value.non_retryable is non_retryable
 
 
 class TestDeleteBootresourcefileActivity:
@@ -654,9 +672,12 @@ class TestDeleteBootresourcefileActivity:
         self,
         mocker,
         boot_activities: BootResourcesActivity,
+        services_mock: ServiceCollectionV3,
         activity_env: ActivityEnvironment,
     ) -> None:
         mocker.patch("asyncio.sleep")
+        services_mock.boot_resource_files = Mock(BootResourceFilesService)
+        services_mock.boot_resource_files.get_many = AsyncMock(return_value=[])
 
         heartbeats = []
         activity_env.on_heartbeat = lambda *args: heartbeats.append(args[0])
@@ -674,10 +695,41 @@ class TestDeleteBootresourcefileActivity:
         self,
         mock_local_file: Mock,
         boot_activities: BootResourcesActivity,
+        services_mock: ServiceCollectionV3,
         activity_env: ActivityEnvironment,
     ) -> None:
+        services_mock.boot_resource_files = Mock(BootResourceFilesService)
+        services_mock.boot_resource_files.get_many = AsyncMock(return_value=[])
+
         param = ResourceDeleteParam(
             files=[ResourceIdentifier("0" * 64, "0" * 7)]
+        )
+        res = await activity_env.run(
+            boot_activities.delete_bootresourcefile, param
+        )
+        assert res is True
+        mock_local_file.unlink.assert_called_once()
+
+    async def test_skips_files_that_were_recreated(
+        self,
+        mock_local_file: Mock,
+        boot_activities: BootResourcesActivity,
+        services_mock: ServiceCollectionV3,
+        activity_env: ActivityEnvironment,
+    ) -> None:
+        # A newer import recreated a BootResourceFile reusing the sha256
+        # of the first identifier below, after the delete was scheduled.
+        recreated_file = Mock(BootResourceFile, sha256="1" * 64)
+        services_mock.boot_resource_files = Mock(BootResourceFilesService)
+        services_mock.boot_resource_files.get_many = AsyncMock(
+            return_value=[recreated_file]
+        )
+
+        param = ResourceDeleteParam(
+            files=[
+                ResourceIdentifier("1" * 64, "1" * 7),
+                ResourceIdentifier("2" * 64, "2" * 7),
+            ]
         )
         res = await activity_env.run(
             boot_activities.delete_bootresourcefile, param
@@ -711,6 +763,8 @@ class TestFetchManifestAndUpdateCacheActivity:
         )
         services_mock.notifications = Mock(NotificationsService)
         services_mock.notifications.delete_one.return_value = None
+        services_mock.temporal = Mock(TemporalService)
+        services_mock.temporal.cancel_workflows.return_value = None
 
         heartbeats = []
         activity_env.on_heartbeat = lambda *args: heartbeats.append(args[0])
@@ -730,6 +784,7 @@ class TestFetchManifestAndUpdateCacheActivity:
                 )
             ),
         )
+        services_mock.temporal.cancel_workflows.assert_awaited_once()
 
     async def test_creates_notification_if_exception_is_raised(
         self,
@@ -760,6 +815,7 @@ class TestFetchManifestAndUpdateCacheActivity:
         services_mock.boot_source_selections = Mock(
             BootSourceSelectionsService
         )
+        services_mock.temporal = Mock(TemporalService)
 
         await activity_env.run(boot_activities.fetch_manifest_and_update_cache)
 
@@ -824,7 +880,7 @@ class TestGetFilesToDownloadForSelectionActivity:
         services_mock.boot_source_selections.get_by_id.return_value = (
             boot_source_selection
         )
-        services_mock.boot_source_selections.get_one.return_value = (
+        services_mock.boot_source_selections.get_many.return_value = [
             BootSourceSelection(
                 id=2,
                 os="ubuntu",
@@ -833,7 +889,7 @@ class TestGetFilesToDownloadForSelectionActivity:
                 boot_source_id=2,
                 legacyselection_id=1,
             )
-        )
+        ]
 
         services_mock.boot_resources = Mock(BootResourceService)
 
@@ -867,7 +923,7 @@ class TestGetFilesToDownloadForSelectionActivity:
         services_mock.boot_source_selections.get_by_id.assert_awaited_once_with(
             1
         )
-        services_mock.boot_source_selections.get_one.assert_awaited_once_with(
+        services_mock.boot_source_selections.get_many.assert_awaited_once_with(
             query=QuerySpec(
                 where=BootSourceSelectionClauseFactory.and_clauses(
                     [

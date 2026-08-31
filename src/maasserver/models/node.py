@@ -64,7 +64,6 @@ from netaddr import IPAddress, IPNetwork
 import petname
 from temporalio.client import WorkflowFailureError
 from temporalio.common import WorkflowIDReusePolicy
-from twisted.internet import reactor
 from twisted.internet.defer import (
     Deferred,
     DeferredList,
@@ -73,7 +72,6 @@ from twisted.internet.defer import (
 )
 from twisted.internet.error import ConnectionDone
 from twisted.python.failure import Failure
-from twisted.python.threadable import isInIOThread
 
 from maascommon.constants import NODE_TIMEOUT
 from maascommon.osystem import BOOT_IMAGE_PURPOSE
@@ -84,15 +82,9 @@ from maascommon.workflows.dhcp import (
     ConfigureDHCPParam,
 )
 from maascommon.workflows.power import PowerParam
-from maasserver.clusterrpc.pods import decompose_machine
-from maasserver.clusterrpc.power import (
-    power_driver_check,
-    power_query_all,
-    set_boot_order,
-)
+from maasserver.clusterrpc.power import power_driver_check, power_query_all
 from maasserver.enum import (
     ALLOCATED_NODE_STATUSES,
-    BMC_TYPE,
     FILESYSTEM_FORMAT_TYPE_CHOICES_DICT,
     FILESYSTEM_GROUP_TYPE,
     FILESYSTEM_TYPE,
@@ -201,7 +193,6 @@ from metadataserver.user_data import (
     generate_user_data_for_status,
 )
 from metadataserver.user_data.snippets import get_userdata_template_dir
-from provisioningserver.drivers.pod import Capabilities
 from provisioningserver.drivers.power.ipmi import IPMI_BOOT_TYPE
 from provisioningserver.drivers.power.registry import (
     PowerDriverRegistry,
@@ -1032,12 +1023,6 @@ class Node(CleanSave, TimestampedModel):
     :ivar bmc: The BMC / power controller for this node.
     :ivar tags: The list of :class:`Tag`s associated with this `Node`.
     :ivar objects: The :class:`GeneralManager`.
-    :ivar install_rackd: An optional flag to indicate if this node should be
-        deployed with the rack controller.
-    :ivar install_kvm: An optional flag to indicate if this node should be
-        deployed with KVM and added to MAAS.
-    :ivar register_vmhost: An optional flag to indicate if this node should be
-        deployed with LXD and registered to MAAS as a VM host.
     :ivar enable_ssh: An optional flag to indicate if this node can have
         ssh enabled during commissioning, allowing the user to ssh into the
         machine's commissioning environment using the user's SSH key.
@@ -1297,15 +1282,6 @@ class Node(CleanSave, TimestampedModel):
     # empty by default, and the default user.
     default_user = CharField(max_length=32, blank=True, default="")
 
-    # Used to deploy the rack controller on a installation machine.
-    install_rackd = BooleanField(default=False)
-
-    # Used to deploy KVM (via libvirt) on a machine and register it as a VM
-    # host.
-    install_kvm = BooleanField(default=False)
-    # Used to deploy LXD on a machine and register it as a VM host.
-    register_vmhost = BooleanField(default=False)
-
     # Used to determine whether to:
     #  1. Import the SSH Key during commissioning and keep power on.
     #  2. Skip reconfiguring networking when a node is commissioned.
@@ -1509,10 +1485,6 @@ class Node(CleanSave, TimestampedModel):
     @property
     def is_device(self) -> bool:
         return self.node_type == NODE_TYPE.DEVICE
-
-    @property
-    def is_pod(self):
-        return self.get_hosted_pods().exists()
 
     @property
     def next_sync(self):
@@ -2233,9 +2205,7 @@ class Node(CleanSave, TimestampedModel):
     def _remove_orphaned_bmcs(self):
         from maasserver.models.bmc import BMC
 
-        BMC.objects.filter(node__isnull=True).exclude(
-            bmc_type=BMC_TYPE.POD
-        ).delete()
+        BMC.objects.filter(node__isnull=True).delete()
 
     def display_status(self):
         """Return status text as displayed to the user."""
@@ -3172,76 +3142,16 @@ class Node(CleanSave, TimestampedModel):
             self.as_node(),
         )
 
-        bmc = self.bmc
-        if (
-            self.node_type == NODE_TYPE.MACHINE
-            and bmc is not None
-            and bmc.bmc_type == BMC_TYPE.POD
-            and Capabilities.COMPOSABLE in bmc.capabilities
-        ):
-            pod = bmc.as_pod()
+        maaslog.info("%s: Deleting node", self.hostname)
 
-            client_idents = pod.get_client_identifiers()
+        # Delete my BMC if no other Nodes are using it.
+        if self.bmc is not None and self.bmc.node_set.count() == 1:
+            # Delete my orphaned BMC.
+            maaslog.info("%s: Deleting my BMC '%s'", self.hostname, self.bmc)
+            self.bmc.delete()
 
-            @transactional
-            def _save(machine_id, pod_id, result):
-                from maasserver.models.bmc import Pod
-
-                machine = Machine.objects.filter(id=machine_id).first()
-                if machine is not None:
-                    maaslog.info("%s: Deleting machine", machine.hostname)
-                    # delete related VirtualMachine, if any
-                    from maasserver.models.virtualmachine import VirtualMachine
-
-                    VirtualMachine.objects.filter(
-                        machine_id=machine_id
-                    ).delete()
-                    delete_node_secrets()
-                    super(Node, machine).delete()
-
-                if isinstance(result, Failure):
-                    maaslog.warning(
-                        f"{self.hostname}: Failure decomposing machine: {result.value}"
-                    )
-                    return
-
-                pod = Pod.objects.filter(id=pod_id).first()
-                if pod is not None:
-                    pod.sync_hints(result)
-
-            maaslog.info("%s: Decomposing machine", self.hostname)
-
-            d = post_commit()
-            d.addCallback(lambda _: getClientFromIdentifiers(client_idents))
-            d.addCallback(
-                decompose_machine,
-                pod.power_type,
-                self.get_power_parameters(),
-                pod_id=pod.id,
-                name=pod.name,
-            )
-            d.addBoth(
-                lambda result: (
-                    deferToDatabase(_save, self.id, pod.id, result)
-                )
-            )
-        else:
-            maaslog.info("%s: Deleting node", self.hostname)
-
-            # Delete my BMC if no other Nodes are using it.
-            if (
-                self.bmc is not None
-                and self.bmc.bmc_type == BMC_TYPE.BMC
-                and self.bmc.node_set.count() == 1
-            ):
-                # Delete my orphaned BMC.
-                maaslog.info(
-                    "%s: Deleting my BMC '%s'", self.hostname, self.bmc
-                )
-                self.bmc.delete()
-
-            delete_node_secrets()
-            super().delete(*args, **kwargs)
+        delete_node_secrets()
+        super().delete(*args, **kwargs)
 
     def set_random_hostname(self):
         """Set a random `hostname`."""
@@ -3428,31 +3338,6 @@ class Node(CleanSave, TimestampedModel):
             return interfaces + block_devices
         else:
             return block_devices + interfaces
-
-    def set_boot_order(self, network_boot=None):
-        """Remotely configure the Node to network or local boot.
-
-        If supported by the power driver this function will configure a
-        Node remotely to either boot from the network or boot locally.
-        This isn't done as part of self.set_netboot() as power commands
-        already use self._power_control_node() which figures out which
-        rack controller to issue power commands from.
-        """
-        power_info = self.get_effective_power_info()
-        # Only send RPC call to set boot order if power driver
-        # supports it.
-        if not power_info.can_set_boot_order:
-            return
-
-        boot_order = self._get_boot_order(network_boot)
-
-        @asynchronous
-        def configure_boot_order():
-            return self._power_control_node(
-                succeed(None), None, power_info, boot_order
-            )
-
-        configure_boot_order().wait(120)
 
     def get_effective_special_filesystems(self):
         """Return special filesystems for the node."""
@@ -3827,8 +3712,6 @@ class Node(CleanSave, TimestampedModel):
         if scripts is None:
             scripts = []
 
-        self.maybe_delete_pods(not force)
-
         config = Config.objects.get_configs(
             [
                 "commissioning_osystem",
@@ -4042,9 +3925,6 @@ class Node(CleanSave, TimestampedModel):
         self.license_key = ""
         self.hwe_kernel = None
         self.current_deployment_script_set = None
-        self.install_rackd = False
-        self.install_kvm = False
-        self.register_vmhost = False
         self.enable_hw_sync = False
         self.sync_interval = None
         self.last_sync = None
@@ -4104,29 +3984,6 @@ class Node(CleanSave, TimestampedModel):
             Event.objects.create_node_event(self, EVENT_TYPES.RELEASED)
             # Remove all set owner data.
             OwnerData.objects.filter(node=self).delete()
-
-    def maybe_delete_pods(self, dry_run: bool):
-        """Check if any pods are associated with this Node.
-
-        All pods will be deleted if dry_run=False is passed in.
-
-        :param dry_run: If True, raises NodeActionError rather than deleting
-            pods.
-        """
-        hosted_pods = list(
-            self.get_hosted_pods().values_list("name", flat=True)
-        )
-        if len(hosted_pods) > 0:
-            if dry_run:
-                raise ValidationError(
-                    "The following VM hosts must be removed first:"
-                    f" {', '.join(hosted_pods)}"
-                )
-            for pod in self.get_hosted_pods():
-                if isInIOThread():
-                    pod.async_delete()
-                else:
-                    reactor.callFromThread(pod.async_delete)
 
     def set_netboot(self, on=True):
         """Set netboot on or off."""
@@ -5371,7 +5228,10 @@ class Node(CleanSave, TimestampedModel):
                 subnet.gateway_ip IS NOT NULL AND
                 host(subnet.gateway_ip) != '' AND
                 staticip.alloc_type != 5 AND /* Ignore DHCP */
-                staticip.alloc_type != 6 /* Ignore DISCOVERED */
+                staticip.alloc_type != 6 AND /* Ignore DISCOVERED */
+                /* Ignore LINK_UP / Unconfigured (STICKY with no IP), but keep
+                   AUTO links that have no IP assigned yet (pre-deployment) */
+                NOT (staticip.alloc_type = 1 AND staticip.ip IS NULL)
             ORDER BY
                 family(subnet.gateway_ip),
                 vlan.dhcp_on DESC,
@@ -5440,17 +5300,26 @@ class Node(CleanSave, TimestampedModel):
         """
         all_gateways = self.get_gateways_by_priority()
 
-        # Get the set gateways on the node.
+        # Get the set gateways on the node. Links that are
+        # unconfigured (LINK_UP) should not be used as the gateway.
         gateway_ipv4 = None
         gateway_ipv6 = None
-        if self.gateway_link_ipv4 is not None:
+        if (
+            self.gateway_link_ipv4 is not None
+            and self.gateway_link_ipv4.get_interface_link_type()
+            != INTERFACE_LINK_TYPE.LINK_UP
+        ):
             subnet = self.gateway_link_ipv4.subnet
             if subnet is not None:
                 if subnet.gateway_ip:
                     gateway_ipv4 = self._get_gateway_tuple(
                         self.gateway_link_ipv4
                     )
-        if self.gateway_link_ipv6 is not None:
+        if (
+            self.gateway_link_ipv6 is not None
+            and self.gateway_link_ipv6.get_interface_link_type()
+            != INTERFACE_LINK_TYPE.LINK_UP
+        ):
             subnet = self.gateway_link_ipv6.subnet
             if subnet is not None:
                 if subnet.gateway_ip:
@@ -5800,27 +5669,14 @@ class Node(CleanSave, TimestampedModel):
         user,
         user_data=None,
         comment=None,
-        install_kvm=None,
-        register_vmhost=None,
-        bridge_type=None,
-        bridge_stp=None,
-        bridge_fd=None,
         enable_hw_sync=None,
     ):
         if not user.has_perm(NodePermission.edit, self):
             # You can't start a node you don't own unless you're an admin.
             raise PermissionDenied()
 
-        updates = {}
-        if not self.install_kvm and install_kvm:
-            updates["install_kvm"] = True
-        if not self.register_vmhost and register_vmhost:
-            updates["register_vmhost"] = True
         if not self.enable_hw_sync and enable_hw_sync:
-            updates["enable_hw_sync"] = True
-        if updates:
-            for key, value in updates.items():
-                setattr(self, key, value)
+            self.enable_hw_sync = True
             self.save()
 
         deployment_ephemeral_user_data = None
@@ -5833,12 +5689,6 @@ class Node(CleanSave, TimestampedModel):
         if self.status == NODE_STATUS.ALLOCATED:
             event = EVENT_TYPES.REQUEST_NODE_START_DEPLOYMENT
             allow_power_cycle = True
-            if self.install_kvm or self.register_vmhost:
-                self._create_acquired_bridges(
-                    bridge_type=bridge_type,
-                    bridge_stp=bridge_stp,
-                    bridge_fd=bridge_fd,
-                )
 
             deployment_ephemeral_user_data = generate_user_data_for_status(
                 node=self,
@@ -5893,12 +5743,6 @@ class Node(CleanSave, TimestampedModel):
                             ]
                         }
                     )
-        if self.ephemeral_deploy and (
-            self.install_kvm or self.register_vmhost
-        ):
-            raise ValidationError(
-                "A machine can not be a VM host if it is deployed to memory."
-            )
         if self.ephemeral_deploy:
             from maasserver.utils.osystems import (
                 get_working_kernel,
@@ -6517,14 +6361,6 @@ class Node(CleanSave, TimestampedModel):
             if try_fallback:
                 d.addErrback(eb_fallback_clients)
             d.addCallback(cb_check_power_driver, power_info)
-            if order:
-                d.addCallback(
-                    set_boot_order,
-                    self.system_id,
-                    self.hostname,
-                    power_info,
-                    order,
-                )
             if power_method_name:
                 d.addCallback(
                     lambda _: deferToDatabase(
@@ -6533,6 +6369,7 @@ class Node(CleanSave, TimestampedModel):
                         self,
                         power_info,
                         self.is_dpu,
+                        order,
                     ),
                 )
 
@@ -6866,19 +6703,6 @@ class Node(CleanSave, TimestampedModel):
         else:
             return script_result.stdout.decode("utf-8").splitlines()
 
-    def get_hosted_pods(self) -> QuerySet:
-        # Circular imports
-        from maasserver.models import Pod
-
-        # Node's aren't created for Virsh or Intel Pods so the pod.hints.nodes
-        # association isn't created. LXD Pods always have this association.
-        our_static_ips = StaticIPAddress.objects.filter(
-            interface__node_config_id=self.current_config_id
-        ).values_list("ip")
-        return Pod.objects.filter(
-            Q(hints__nodes__in=[self]) | Q(ip_address__ip__in=our_static_ips)
-        ).distinct()
-
     def should_be_dynamically_deleted(self):
         """Best guess if the node was dynamically created.
 
@@ -6924,14 +6748,7 @@ class Machine(Node):
         super().__init__(*args, **kwargs)
 
     def delete(self, force=False):
-        """Deletes this Machine.
-
-        Before deletion, checks if any hosted pods exist.
-
-        Raises ValidationError if the machine is a host for one or more pods,
-        and `force=True` was not specified.
-        """
-        self.maybe_delete_pods(not force)
+        """Deletes this Machine."""
         return super().delete()
 
 
@@ -7224,11 +7041,6 @@ class RackController(Controller):
 
     def delete(self, force=False):
         """Delete this rack controller."""
-        # Don't bother with the pod check if this is a region+rack, because
-        # deleting a region+rack results in a region-only controller.
-        if self.node_type != NODE_TYPE.REGION_AND_RACK_CONTROLLER:
-            self.maybe_delete_pods(not force)
-
         from maasserver.models import RegionRackRPCConnection
 
         # Migrate this rack controller away from managing any VLAN's.
@@ -7345,7 +7157,6 @@ class RegionController(Controller):
 
     def delete(self, force=False):
         """Delete this region controller."""
-        self.maybe_delete_pods(not force)
         # Avoid circular dependency.
         from maasserver.models import RegionControllerProcess
 

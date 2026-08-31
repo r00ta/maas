@@ -96,6 +96,9 @@ from maasservicelayer.db.repositories.service_status import (
     ServiceStatusRepository,
 )
 from maasservicelayer.db.repositories.spaces import SpacesRepository
+from maasservicelayer.db.repositories.ssh_host_keys import (
+    TrustedSshHostKeyRepository,
+)
 from maasservicelayer.db.repositories.sshkeys import SshKeysRepository
 from maasservicelayer.db.repositories.sslkeys import SSLKeysRepository
 from maasservicelayer.db.repositories.staticipaddress import (
@@ -122,7 +125,6 @@ from maasservicelayer.db.repositories.usergroups_members import (
 )
 from maasservicelayer.db.repositories.users import UsersRepository
 from maasservicelayer.db.repositories.vlans import VlansRepository
-from maasservicelayer.db.repositories.vmcluster import VmClustersRepository
 from maasservicelayer.db.repositories.zones import ZonesRepository
 from maasservicelayer.services.agents import AgentsService
 from maasservicelayer.services.auth import AuthService
@@ -201,6 +203,7 @@ from maasservicelayer.services.secrets import (
 )
 from maasservicelayer.services.service_status import ServiceStatusService
 from maasservicelayer.services.spaces import SpacesService
+from maasservicelayer.services.ssh_host_keys import TrustedSshHostKeysService
 from maasservicelayer.services.sshkeys import SshKeysService
 from maasservicelayer.services.sslkey import SSLKeysService
 from maasservicelayer.services.staticipaddress import StaticIPAddressService
@@ -221,7 +224,6 @@ from maasservicelayer.services.ui_subnets import UISubnetsService
 from maasservicelayer.services.usergroups import UserGroupsService
 from maasservicelayer.services.users import UsersService
 from maasservicelayer.services.vlans import VlansService
-from maasservicelayer.services.vmcluster import VmClustersService
 from maasservicelayer.services.zones import ZonesService
 
 
@@ -316,6 +318,7 @@ class ServiceCollectionV3:
     subnets: SubnetsService
     switches: SwitchesService
     tags: TagsService
+    trusted_ssh_host_keys: TrustedSshHostKeysService
     temporal: TemporalService
     tokens: TokensService
     usergroups: UserGroupsService
@@ -323,7 +326,6 @@ class ServiceCollectionV3:
     v3dnsrrsets: V3DNSResourceRecordSetsService
     v3subnet_utilization: V3SubnetUtilizationService
     vlans: VlansService
-    vmclusters: VmClustersService
     ui_subnets: UISubnetsService
     zones: ZonesService
 
@@ -397,6 +399,10 @@ class ServiceCollectionV3:
             repository=TagsRepository(context),
             events_service=services.events,
             temporal_service=services.temporal,
+        )
+        services.trusted_ssh_host_keys = TrustedSshHostKeysService(
+            context=context,
+            repository=TrustedSshHostKeyRepository(context),
         )
         services.scriptresults = ScriptResultsService(
             context=context,
@@ -489,13 +495,9 @@ class ServiceCollectionV3:
             notifications_service=services.notifications,
             msm_service=services.msm,
         )
-        services.vmclusters = VmClustersService(
-            context=context, vmcluster_repository=VmClustersRepository(context)
-        )
         services.zones = ZonesService(
             context=context,
             nodes_service=services.nodes,
-            vmcluster_service=services.vmclusters,
             zones_repository=ZonesRepository(context),
             cache=cache.get(
                 ZonesService.__name__, ZonesService.build_cache_object

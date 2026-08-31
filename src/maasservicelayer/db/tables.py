@@ -24,7 +24,7 @@ from sqlalchemy import (
     text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, CIDR, INET, JSONB, OID
+from sqlalchemy.dialects.postgresql import ARRAY, CIDR, INET, JSONB
 from sqlalchemy.sql.schema import PrimaryKeyConstraint
 
 METADATA = MetaData()
@@ -115,59 +115,9 @@ BMCTable = Table(
         ),
         nullable=True,
     ),
-    Column("architectures", ARRAY(Text), nullable=True),
-    Column("bmc_type", Integer, nullable=False),
-    Column("capabilities", ARRAY(Text), nullable=True),
-    Column("cores", Integer, nullable=False),
-    Column("cpu_speed", Integer, nullable=False),
-    Column("local_storage", BigInteger, nullable=False),
-    Column("memory", Integer, nullable=False),
-    Column("name", String(255), nullable=False),
-    Column(
-        "pool_id",
-        Integer,
-        ForeignKey(
-            "maasserver_resourcepool.id",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-        nullable=True,
-    ),
-    Column(
-        "zone_id",
-        BigInteger,
-        ForeignKey(
-            "maasserver_zone.id",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-        nullable=False,
-    ),
-    Column("tags", ARRAY(Text), nullable=True),
-    Column("cpu_over_commit_ratio", Float, nullable=False),
-    Column("memory_over_commit_ratio", Float, nullable=False),
-    Column(
-        "default_storage_pool_id",
-        BigInteger,
-        ForeignKey(
-            "maasserver_podstoragepool.id",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-    ),
     Column("power_parameters", JSONB, nullable=False),
-    Column("default_macvlan_mode", String(32), nullable=True),
-    Column("version", Text, nullable=False),
-    Column("created_with_cert_expiration_days", Integer, nullable=True),
-    Column("created_with_maas_generated_cert", Boolean, nullable=True),
-    Column("created_with_trust_password", Boolean, nullable=True),
     Column("created_by_commissioning", Boolean, nullable=True),
     Index("maasserver__power_p_511df2_hash", "power_parameters"),
-    Index("maasserver_bmc_default_pool_id_848e4429", "pool_id"),
-    Index(
-        "maasserver_bmc_default_storage_pool_id_5f48762b",
-        "default_storage_pool_id",
-    ),
     Index("maasserver_bmc_ip_address_id_79362d14", "ip_address_id"),
     Index("maasserver_bmc_power_type_93755dda", "power_type"),
     Index(
@@ -178,11 +128,10 @@ BMCTable = Table(
     Index(
         "maasserver_bmc_power_type_parameters_idx",
         "power_type",
-        func.md5(text("power_parameters::text")),
+        func.public.digest(text("(power_parameters)::text"), "sha256"),
         unique=True,
         postgresql_where=text("(power_type)::text <> 'manual'::text"),
     ),
-    Index("maasserver_bmc_zone_id_774ea0de", "zone_id"),
 )
 
 BootResourceTable = Table(
@@ -221,16 +170,6 @@ BootResourceFileTable = Table(
     Column("filetype", String(20), nullable=False),
     Column("extra", JSONB, nullable=False),
     Column(
-        "largefile_id",
-        BigInteger,
-        ForeignKey(
-            "maasserver_largefile.id",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-        nullable=True,
-    ),
-    Column(
         "resource_set_id",
         BigInteger,
         ForeignKey(
@@ -245,7 +184,6 @@ BootResourceFileTable = Table(
     Column("filename_on_disk", String(64), nullable=False),
     UniqueConstraint("resource_set_id", "filename"),
     Index("maasserver__sha256_f07a8e_idx", "sha256"),
-    Index("maasserver_bootresourcefile_largefile_id_cf035187", "largefile_id"),
     Index(
         "maasserver_bootresourcefile_resource_set_id_2fd093ab",
         "resource_set_id",
@@ -1087,23 +1025,6 @@ IPRangeTable = Table(
     Index("maasserver_iprange_subnet_id_de83b8f1", "subnet_id"),
 )
 
-LargeFileTable = Table(
-    "maasserver_largefile",
-    METADATA,
-    Column("id", BigInteger, Identity(), primary_key=True, nullable=False),
-    Column("created", DateTime(timezone=True), nullable=False),
-    Column("updated", DateTime(timezone=True), nullable=False),
-    Column("sha256", String(64), nullable=False, unique=True),
-    Column("total_size", BigInteger, nullable=False),
-    Column("content", OID, nullable=False),
-    Column("size", BigInteger, nullable=False),
-    Index(
-        "maasserver_largefile_sha256_40052db0_like",
-        "sha256",
-        postgresql_ops={"sha256": "varchar_pattern_ops"},
-    ),
-)
-
 MDNSTable = Table(
     "maasserver_mdns",
     METADATA,
@@ -1170,29 +1091,6 @@ PartitionTableTable = Table(
     Index(
         "maasserver_partitiontable_block_device_id_ee132cc5", "block_device_id"
     ),
-)
-
-PodStoragePoolTable = Table(
-    "maasserver_podstoragepool",
-    METADATA,
-    Column("id", BigInteger, Identity(), primary_key=True),
-    Column("name", String(255), nullable=False),
-    Column("pool_id", String(255), nullable=False),
-    Column("pool_type", String(255), nullable=False),
-    Column("path", String(4095), nullable=False),
-    Column("storage", BigInteger, nullable=False),
-    Column(
-        "pod_id",
-        BigInteger,
-        ForeignKey(
-            "maasserver_bmc.id",
-            deferrable=True,
-            initially="DEFERRED",
-            name="maasserver_podstoragepool_pod_id_11db94aa_fk",
-        ),
-        nullable=False,
-    ),
-    Index("maasserver_podstoragepool_pod_id_11db94aa", "pod_id"),
 )
 
 NeighbourTable = Table(
@@ -1507,7 +1405,6 @@ NodeTable = Table(
         ),
         nullable=True,
     ),
-    Column("install_rackd", Boolean, nullable=False),
     Column("locked", Boolean, nullable=False),
     Column(
         "pool_id",
@@ -1518,12 +1415,10 @@ NodeTable = Table(
         nullable=True,
     ),
     Column("instance_power_parameters", JSONB, nullable=False),
-    Column("install_kvm", Boolean, nullable=False),
     Column("hardware_uuid", String(36), nullable=True, unique=True),
     Column("ephemeral_deploy", Boolean, nullable=False),
     Column("description", Text, nullable=False),
     Column("dynamic", Boolean, nullable=False),
-    Column("register_vmhost", Boolean, nullable=False),
     Column("last_applied_storage_layout", String(50), nullable=False),
     Column(
         "current_config_id",
@@ -1697,6 +1592,7 @@ OIDCProviderTable = Table(
     "maasserver_oidc_provider",
     METADATA,
     Column("id", BigInteger, Identity(), primary_key=True),
+    Column("vendor", Integer, nullable=False),
     Column("created", DateTime(timezone=True), nullable=False),
     Column("updated", DateTime(timezone=True), nullable=False),
     Column("name", String(255), nullable=False, unique=True),
@@ -1708,6 +1604,9 @@ OIDCProviderTable = Table(
     Column("token_type", Integer, nullable=False),
     Column("enabled", Boolean, nullable=False),
     Column("metadata", JSONB, nullable=False),
+    Column(
+        "config", JSONB, nullable=True
+    ),  # For additional config options specific to the provider
 )
 
 OIDCRevokedTokenTable = Table(
@@ -2288,6 +2187,7 @@ SwitchTable = Table(
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("created", DateTime(timezone=True), nullable=False),
     Column("updated", DateTime(timezone=True), nullable=False),
+    Column("name", String(255), nullable=True),
     Column(
         "target_image_id",
         BigInteger,
@@ -2420,6 +2320,21 @@ TokenTable = Table(
     ),
     Index("piston3_token_user_id_e5cd818c", "user_id"),
     Index("piston3_token_consumer_id_b178993d", "consumer_id"),
+)
+
+TrustedSshHostKeyTable = Table(
+    "maasserver_trustedsshhostkey",
+    METADATA,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("created", DateTime(timezone=True), nullable=False),
+    Column("updated", DateTime(timezone=True), nullable=False),
+    Column("host", String(255), nullable=False),
+    Column("key_type", String(64), nullable=False),
+    Column("public_key", Text, nullable=False),
+    Column("label", String(255), nullable=True),
+    UniqueConstraint(
+        "host", "key_type", "public_key", name="uq_trusted_host_key"
+    ),
 )
 
 UserGroupTable = Table(
@@ -2618,39 +2533,6 @@ VlanTable = Table(
     Index("maasserver_vlan_relay_vlan_id_c026b672", "relay_vlan_id"),
     Index("maasserver_vlan_primary_rack_id_016c2af3", "primary_rack_id"),
     Index("maasserver_vlan_fabric_id_af5275c8", "fabric_id"),
-)
-
-VmClusterTable = Table(
-    "maasserver_vmcluster",
-    METADATA,
-    Column("id", BigInteger, Identity(), primary_key=True),
-    Column("created", DateTime(timezone=True), nullable=False),
-    Column("updated", DateTime(timezone=True), nullable=False),
-    Column("name", Text, nullable=False, unique=True),
-    Column("project", Text, nullable=False),
-    Column(
-        "pool_id",
-        Integer,
-        ForeignKey(
-            "maasserver_resourcepool.id", deferrable=True, initially="DEFERRED"
-        ),
-        nullable=True,
-    ),
-    Column(
-        "zone_id",
-        BigInteger,
-        ForeignKey(
-            "maasserver_zone.id", deferrable=True, initially="DEFERRED"
-        ),
-        nullable=False,
-    ),
-    Index("maasserver_vmcluster_zone_id_07623572", "zone_id"),
-    Index("maasserver_vmcluster_pool_id_aad02386", "pool_id"),
-    Index(
-        "maasserver_vmcluster_name_dbc3c69c_like",
-        "name",
-        postgresql_ops={"name": "text_pattern_ops"},
-    ),
 )
 
 ZoneTable = Table(

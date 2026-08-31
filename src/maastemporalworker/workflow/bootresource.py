@@ -327,9 +327,16 @@ class BootResourcesActivity(ActivityBase):
                 ex.strerror if ex.strerror else str(ex),
                 type=ex.__class__.__name__,
             ) from ex
+
         except httpx.HTTPError as ex:
             await lfile.unlink()
             await self.report_progress(param.rfile_ids, 0)
+            if isinstance(ex, httpx.HTTPStatusError):
+                # 4xx and 5xx errors: most probably a misconfiguration of the images stream.
+                # Raise a non-retryable error and let the user fix it.
+                raise ApplicationError(
+                    str(ex), type=ex.__class__.__name__, non_retryable=True
+                ) from ex
             raise ApplicationError(str(ex), type=ex.__class__.__name__) from ex
         except (asyncio.CancelledError, CancelledError) as ex:
             await lfile.unlink()
@@ -341,8 +348,37 @@ class BootResourcesActivity(ActivityBase):
     async def delete_bootresourcefile(
         self, param: ResourceDeleteParam
     ) -> bool:
-        """Delete files from disk"""
+        """Delete files from disk, unless they have become referenced again.
+
+        The files to delete are chosen when the workflow is scheduled, but
+        execution (particularly resolving region endpoints) can be
+        delayed. If a newer import recreates a BootResourceFile with the
+        same sha256 in the meantime, deleting it would remove content that
+        is genuinely in use again. So each file is re-checked against the
+        database immediately before it is unlinked.
+        """
+        if not param.files:
+            return True
+
+        async with self.start_transaction() as services:
+            still_referenced_shas = {
+                f.sha256
+                for f in await services.boot_resource_files.get_many(
+                    query=QuerySpec(
+                        where=BootResourceFileClauseFactory.with_sha256_in(
+                            list({file.sha256 for file in param.files})
+                        )
+                    )
+                )
+            }
         for file in param.files:
+            if file.sha256 in still_referenced_shas:
+                logger.info(
+                    f"skipping delete of {file}: a BootResourceFile with "
+                    "this sha256 was recreated since the deletion was "
+                    "scheduled"
+                )
+                continue
             logger.debug(f"attempt to delete {file}")
             lfile = AsyncLocalBootResourceFile(
                 file.sha256, file.filename_on_disk, 0
@@ -375,6 +411,15 @@ class BootResourcesActivity(ActivityBase):
             if boot_source_id:
                 where_clauses.append(
                     BootSourcesClauseFactory.with_id(boot_source_id)
+                )
+            else:
+                # If we are fetching manifests for all the boot sources,
+                # cancel all the other running fetch manifest workflows
+                # to avoid serialization errors.
+                await services.temporal.cancel_workflows(
+                    query=f"WorkflowType='{FETCH_MANIFEST_AND_UPDATE_CACHE_WORKFLOW_NAME}' "
+                    "AND ExecutionStatus='Running' "
+                    f"AND WorkflowId!='{activity.info().workflow_id}'"
                 )
 
             boot_sources = await services.boot_sources.get_many(
@@ -517,7 +562,7 @@ class BootResourcesActivity(ActivityBase):
             )
             assert selection is not None
 
-            # Remove any existing boot resources related to a selection with
+            # Remove any existing boot resources related to any selection with
             # the same os/arch/release. This can happen when there is a clash
             # between selections. (e.g. two selections for ubuntu/20.04/amd64
             # from different boot sources).
@@ -525,28 +570,27 @@ class BootResourcesActivity(ActivityBase):
             # the only one to be downloaded, i.e. we don't allow the user to
             # start a sync selection workflow for a lower priority selection.
             # This is enforced at the API level and in the master-image-sync wf.
-            if (
+            for (
                 existing_selection
-                := await services.boot_source_selections.get_one(
-                    query=QuerySpec(
-                        where=BootSourceSelectionClauseFactory.and_clauses(
-                            [
-                                BootSourceSelectionClauseFactory.with_os(
-                                    selection.os
-                                ),
-                                BootSourceSelectionClauseFactory.with_arch(
-                                    selection.arch
-                                ),
-                                BootSourceSelectionClauseFactory.with_release(
-                                    selection.release
-                                ),
-                                BootSourceSelectionClauseFactory.not_clause(
-                                    BootSourceSelectionClauseFactory.with_id(
-                                        selection.id
-                                    )
-                                ),
-                            ]
-                        )
+            ) in await services.boot_source_selections.get_many(
+                query=QuerySpec(
+                    where=BootSourceSelectionClauseFactory.and_clauses(
+                        [
+                            BootSourceSelectionClauseFactory.with_os(
+                                selection.os
+                            ),
+                            BootSourceSelectionClauseFactory.with_arch(
+                                selection.arch
+                            ),
+                            BootSourceSelectionClauseFactory.with_release(
+                                selection.release
+                            ),
+                            BootSourceSelectionClauseFactory.not_clause(
+                                BootSourceSelectionClauseFactory.with_id(
+                                    selection.id
+                                )
+                            ),
+                        ]
                     )
                 )
             ):
@@ -891,7 +935,16 @@ class SyncBootResourcesWorkflow:
 
 @workflow.defn(name=DELETE_BOOTRESOURCE_WORKFLOW_NAME, sandboxed=False)
 class DeleteBootResourceWorkflow:
-    """Delete a BootResourceFile from this cluster"""
+    """Delete a BootResourceFile, unless it has become referenced again.
+
+    The files targeted by this workflow are chosen when it is scheduled,
+    but execution (particularly resolving region endpoints) can be
+    delayed. If a newer import recreates a BootResourceFile with the same
+    sha256 in the meantime, deleting it would remove content that is genuinely
+    in use again. So, before deleting, an activity of this workflow
+    re-checks the database immediately and skips any file that is no
+    longer safe to remove.
+    """
 
     @workflow_run_with_context
     async def run(self, input: ResourceDeleteParam) -> None:
@@ -901,8 +954,8 @@ class DeleteBootResourceWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
         )
         regions = frozenset(endpoints.keys())
-        for r in regions:
-            await workflow.execute_activity(
+        tasks = [
+            workflow.execute_activity(
                 DELETE_BOOTRESOURCEFILE_ACTIVITY_NAME,
                 input,
                 task_queue=f"region:{r}",
@@ -910,6 +963,9 @@ class DeleteBootResourceWorkflow:
                 schedule_to_close_timeout=DISK_TIMEOUT,
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
+            for r in regions
+        ]
+        await asyncio.gather(*tasks)
 
 
 @workflow.defn(

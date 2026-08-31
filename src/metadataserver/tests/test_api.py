@@ -1,4 +1,4 @@
-# Copyright 2012-2025 Canonical Ltd.  This software is licensed under the
+# Copyright 2012-2026 Canonical Ltd.  This software is licensed under the
 # GNU Affero General Public License version 3 (see the file LICENSE).
 
 import base64
@@ -20,7 +20,6 @@ from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from django.urls import reverse
 from netaddr import IPNetwork
-from twisted.internet.defer import succeed
 import yaml
 
 from maasserver.api import support
@@ -1135,36 +1134,6 @@ class TestMetadataUserDataStateChanges(MAASServerTestCase):
         signal_workflow.assert_called_with(
             f"deploy:{node.system_id}", "deployed-os-ready"
         )
-
-    def test_skips_status_change_if_installing_kvm_and_sets_agent_name(self):
-        node = factory.make_Node(
-            status=NODE_STATUS.DEPLOYING, install_kvm=True
-        )
-        NodeUserData.objects.set_user_data_for_user_env(
-            node, sample_binary_data
-        )
-        client = make_node_client(node)
-        response = client.get(reverse("metadata-user-data", args=["latest"]))
-        self.assertEqual(http.client.OK, response.status_code)
-        self.assertEqual(NODE_STATUS.DEPLOYING, reload_object(node).status)
-        node = reload_object(node)
-        self.assertEqual(node.agent_name, "maas-kvm-pod")
-
-    def test_skips_status_change_if_registering_vmhost_and_sets_agent_name(
-        self,
-    ):
-        node = factory.make_Node(
-            status=NODE_STATUS.DEPLOYING, register_vmhost=True
-        )
-        NodeUserData.objects.set_user_data_for_user_env(
-            node, sample_binary_data
-        )
-        client = make_node_client(node)
-        response = client.get(reverse("metadata-user-data", args=["latest"]))
-        self.assertEqual(http.client.OK, response.status_code)
-        self.assertEqual(NODE_STATUS.DEPLOYING, reload_object(node).status)
-        node = reload_object(node)
-        self.assertEqual(node.agent_name, "maas-kvm-pod")
 
     def test_returns_plain_text_user_data_when_uploaded_as_plain_text(self):
         signal_workflow = self.patch(node_module, "signal_workflow")
@@ -2855,14 +2824,6 @@ class TestCommissioningAPI(MAASServerTestCase):
 
         self.assertEqual(nmd, reload_object(nmd))
 
-    def test_signaling_commissioning_when_pod_in_any_state(self):
-        pod = factory.make_Pod()
-        node = factory.make_Node(with_empty_script_sets=True)
-        pod.hints.nodes.add(node)
-        client = make_node_client(node=node)
-        response = call_signal(client, status=SIGNAL_STATUS.WORKING)
-        self.assertEqual(response.status_code, http.client.OK)
-
     def test_signaling_commissioning_when_deployed_overwrites(self):
         node = factory.make_Node(
             status=NODE_STATUS.DEPLOYED, with_empty_script_sets=True
@@ -4078,35 +4039,19 @@ class TestByMACMetadataAPI(MAASServerTestCase):
 class TestNetbootOperationAPI(MAASServerTestCase):
     def test_netboot_off(self):
         node = factory.make_Node(netboot=True, power_type="hmcz")
-        mock_power_control_node = self.patch(api.Node, "_power_control_node")
-        mock_power_control_node.return_value = succeed(None)
         client = make_node_client(node=node)
         url = reverse("metadata-version", args=["latest"])
         response = client.post(url, {"op": "netboot_off"})
         node = reload_object(node)
         self.assertFalse(node.netboot, response)
-        mock_power_control_node.assert_called_with(
-            ANY,
-            None,
-            node.get_effective_power_info(),
-            node._get_boot_order(False),
-        )
 
     def test_netboot_on(self):
         node = factory.make_Node(netboot=False, power_type="hmcz")
-        mock_power_control_node = self.patch(api.Node, "_power_control_node")
-        mock_power_control_node.return_value = succeed(None)
         client = make_node_client(node=node)
         url = reverse("metadata-version", args=["latest"])
         response = client.post(url, {"op": "netboot_on"})
         node = reload_object(node)
         self.assertTrue(node.netboot, response)
-        mock_power_control_node.assert_called_with(
-            ANY,
-            None,
-            node.get_effective_power_info(),
-            node._get_boot_order(True),
-        )
 
 
 class TestAnonymousAPI(MAASServerTestCase):
@@ -4116,8 +4061,6 @@ class TestAnonymousAPI(MAASServerTestCase):
 
     def test_anonymous_netboot_off(self):
         node = factory.make_Node(netboot=True, power_type="hmcz")
-        mock_power_control_node = self.patch(api.Node, "_power_control_node")
-        mock_power_control_node.return_value = succeed(None)
         anon_netboot_off_url = reverse(
             "metadata-node-by-id", args=["latest", node.system_id]
         )
@@ -4129,12 +4072,6 @@ class TestAnonymousAPI(MAASServerTestCase):
             (http.client.OK, False),
             (response.status_code, node.netboot),
             response,
-        )
-        mock_power_control_node.assert_called_with(
-            ANY,
-            None,
-            node.get_effective_power_info(),
-            node._get_boot_order(False),
         )
 
     def test_anonymous_get_enlist_preseed(self):
